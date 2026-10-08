@@ -1,0 +1,16 @@
+{
+  "name": "Sélectionneur — manager de foot 3D",
+  "short_name": "Sélectionneur",
+  "description": "Dirigez l'équipe de France et votre club, et vivez chaque match en direct dans un stade 3D.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050914",
+  "theme_color": "#060a16",
+  "lang": "fr",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

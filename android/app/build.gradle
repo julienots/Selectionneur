@@ -1,0 +1,70 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.julienots.selectionneur"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.julienots.selectionneur"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 42
+        versionName "4.2"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // Clé de signature FIXE (commitée) : toutes les versions de l'APK sont signées avec la même
+    // clé, donc une nouvelle version s'installe PAR-DESSUS l'ancienne en gardant la sauvegarde.
+    // (Projet perso hors Play Store. Pour une publication officielle, utiliser une clé privée
+    // non versionnée via les variables d'environnement SEL_KEYSTORE / SEL_KEYSTORE_PASSWORD.)
+    signingConfigs {
+        selectionneur {
+            storeFile file(System.getenv("SEL_KEYSTORE") ?: "selectionneur.keystore")
+            storePassword System.getenv("SEL_KEYSTORE_PASSWORD") ?: "selectionneur"
+            keyAlias System.getenv("SEL_KEY_ALIAS") ?: "selectionneur"
+            keyPassword System.getenv("SEL_KEY_PASSWORD") ?: "selectionneur"
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.selectionneur
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.selectionneur
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

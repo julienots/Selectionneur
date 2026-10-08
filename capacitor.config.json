@@ -1,0 +1,11 @@
+{
+  "appId": "com.julienots.selectionneur",
+  "appName": "Sélectionneur",
+  "webDir": "www",
+  "backgroundColor": "#050914",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": false
+  }
+}

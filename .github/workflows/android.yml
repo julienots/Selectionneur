@@ -1,0 +1,77 @@
+name: APK Android
+
+# Construit l'APK du jeu à chaque push (et à la demande depuis l'onglet "Actions"),
+# puis le publie dans une "Release" GitHub pour pouvoir le télécharger directement
+# depuis le téléphone (Releases -> Selectionneur-v42.apk).
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Dépendances web + vérification de la syntaxe
+        run: |
+          npm ci
+          npm run vendor
+          npm run check
+
+      - name: Copie du jeu dans le projet Android
+        run: npx cap sync android
+
+      - name: Compilation de l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Préparation des fichiers
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/Selectionneur-v${VERSION}.apk"
+          node scripts/build-standalone.mjs
+          cp dist/*.html out/
+          ls -la out
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Selectionneur-apk
+          path: out/*
+
+      - name: Publication (Release GitHub)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}-build${{ github.run_number }}
+          name: Sélectionneur v${{ env.VERSION }} (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            📱 **Installer sur Android** : téléchargez `Selectionneur-v${{ env.VERSION }}.apk` ci-dessous depuis le téléphone, ouvrez-le et autorisez l'installation d'applications de cette source si Android le demande.
+            Les mises à jour s'installent par-dessus la version précédente (même signature) : la sauvegarde est conservée.
+
+            🌐 `selectionneur_v42.html` : version « un seul fichier » du jeu (navigateur, sans installation).
+          files: out/*

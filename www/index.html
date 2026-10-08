@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Sélectionneur — mini manager de foot</title>
+<title>Sélectionneur — manager de foot 3D</title>
 <!--
 ========================================================================================
 GUIDE DE PRISE EN MAIN — À LIRE EN PREMIER SI VOUS REPRENEZ CE PROJET (ajouté juillet 2026)
@@ -21,6 +21,22 @@ séparé), en UN SEUL fichier HTML autonome : une balise "style" pour tout le CS
 Fonts en <link>). Ça tourne tel quel dans un navigateur (généralement testé sur mobile Android via
 Chrome/l'app Claude). Pas de backend : tout l'état du jeu est en mémoire dans une variable globale
 `state` (voir plus bas), persisté en local (voir saveGame()/loadGame()).
+
+## Depuis la v42 : ce n'est plus UN seul fichier, c'est un dépôt GitHub (julienots/selectionneur)
+- `www/index.html` (CE fichier) = tout le jeu (CSS + logique), comme avant.
+- `www/js/stade3d.js` = moteur 3D du match en direct (three.js) : stade, foule, joueurs articulés,
+  caméras TV. Il ne fait que LIRE l'objet match (`m.pos`, `m.us`, `m.minute`...) : la logique de
+  match reste 100% ici. Points d'entrée côté jeu : `mountStade3D()` (fin de `buildLiveMatch`),
+  `mountMatchHero()` (vue d'avant-match), `Stade3D.onGoal()` dans `flashResult()`.
+- `www/vendor/three.min.js`, `www/fonts/` : copiés depuis node_modules par `npm run vendor`.
+- `android/` + `capacitor.config.json` : appli Android (Capacitor). L'APK est compilé par GitHub
+  Actions (`.github/workflows/android.yml`) à chaque push et publié dans les Releases du dépôt.
+- `npm run check` = vérification de syntaxe (remplace l'extraction manuelle + `node --check`).
+- `npm run standalone` = régénère `dist/selectionneur_vNN.html`, l'ancien format "un seul fichier"
+  (three.js, module 3D et polices intégrés dedans) si Julien veut encore un HTML autonome.
+- Livraison : on ne renomme plus le fichier à chaque version ; on incrémente `version` dans
+  package.json, `versionCode`/`versionName` dans android/app/build.gradle et `CACHE_NAME` dans
+  www/sw.js, puis commit + push (le workflow fabrique l'APK).
 
 ## Comment travailler dessus efficacement
 - Le fichier fait plusieurs milliers de lignes. NE PAS le lire en entier d'un coup : `grep -n` pour
@@ -573,12 +589,48 @@ juste après `.empty-note`) :
   ajouter aux 3 endroits habituels. Si Julien demande un jour que la position soit mémorisée d'une
   session à l'autre, il faudra alors l'ajouter à `state.settings` et suivre la procédure des 3
   endroits (objet par défaut, migration `loadGame()`, factory de reset).
+
+v42 — Demande de Julien : "rends ce jeu ultra réaliste, un stade ultra réaliste, personnages etc..
+fais une refonte du jeu incroyable 2D 3D, mets-le en APK". [FAIT] :
+- Nouveau moteur 3D `www/js/stade3d.js` (three.js r160 embarqué, aucun accès réseau requis) branché
+  sur le match en direct : `buildLiveMatch()` appelle `mountStade3D(wrap, m)` qui pose un canvas
+  WebGL dans `#pitchWrap` (classe `.mode3d` qui masque les pastilles 2D). Le moteur 3D lit
+  `m.pos.us/them/ball` (pourcentages) à chaque image et interpole : joueurs humanoïdes articulés
+  (course, frappe, plongeon du gardien, célébrations), ballon avec trajectoires en cloche/frappes
+  et rotation, arbitre + 2 juges de touche + le sélectionneur en costume dans sa zone technique.
+- Stade procédural : pelouse avec bandes de tonte/usure/lignes officielles, double anneau de
+  tribunes en bol, ~30 000 supporters instanciés (shader maison : couleurs des deux équipes, sauts
+  selon le score, bras levés et flashs photo sur les buts), toit translucide avec rampe de
+  projecteurs, panneaux LED défilants, écrans géants avec le score, buts avec filets qui gonflent,
+  drapeaux de corner, bancs de touche, météo (pluie / neige pour "froid", jour pour soleil/canicule,
+  nuit sinon). Tenues : table `KITS` (pays du jeu) + tenue déterministe par nom pour les autres.
+- HUD façon retransmission TV par-dessus la 3D (score, minute, "LIVE", nom du porteur du ballon)
+  + boutons : caméra (TV / Proche / Tribune / Drone), plein écran (`.s3d-fullscreen`), et "2D"
+  pour revenir au terrain 2D historique (préférence en localStorage "sel-view3d", PAS dans `state`,
+  donc rien à migrer). Si WebGL est absent, le jeu reste en 2D sans erreur.
+- `flashResult()` appelle `Stade3D.onGoal(m, side, idx)` (ballon au fond des filets, filet qui
+  gonfle, buteur qui file au poteau de corner, plan serré, confettis si but des nôtres) ;
+  `playSequence()` appelle `Stade3D.onEvent(m,"post"/"save")`.
+- Avant-match : `mountMatchHero()` (onglets Match et Club) affiche un bandeau 3D avec les deux
+  équipes alignées pour les hymnes (`Stade3D.mountShowcase`, 30 i/s pour la batterie). Un SEUL
+  WebGLRenderer pour toute la session, déplacé de conteneur en conteneur à chaque render().
+- Refonte visuelle 2D (bloc CSS "v42 — REFONTE VISUELLE 2D" en fin de style) : halos de
+  projecteurs en fond, verre dépoli, tabbar flottante, tableau d'affichage façon TV, bouton doré
+  à reflet. Polices désormais embarquées (`fonts/fonts.css`) : plus besoin de Google Fonts.
+- APK Android via Capacitor 8 (`android/`), appId com.julienots.selectionneur, icônes et écran de
+  démarrage générés par `scripts/make_icons.py`, thème sombre, clé de signature fixe commitée
+  (android/app/selectionneur.keystore) pour que chaque nouvel APK s'installe par-dessus l'ancien
+  sans perdre la sauvegarde. Dans l'APK : pas de service worker (`IS_NATIVE_APP`), bouton retour
+  Android = ferme le plein écran 3D / la fiche ouverte, sinon met l'appli en arrière-plan.
+ATTENTION si vous reprenez ce chantier : le moteur 3D est purement "spectateur". Si vous changez
+le format de `m.pos` (pourcentages, x = longueur, nos joueurs attaquent vers x=95) ou les index
+des gardiens (index 0), `syncTargets()`/`updateBall()` de stade3d.js doivent suivre. Le TV-cam est
+placé à HW+26 m / 17 m de haut : ne pas le reculer, il finirait DANS la tribune (écran gris).
 -->
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;600;700&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./fonts/fonts.css">
 <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#1b4332">
+<meta name="theme-color" content="#060a16">
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1218,12 +1270,101 @@ button:active, .btn:active, .slot-pick:active, .talk-option:active{transform:sca
   0%{opacity:1; transform:translate(0,0) scale(1);}
   100%{opacity:0; transform:translate(var(--fx),var(--fy)) scale(.3);}
 }
+
+/* =====================================================================================
+   v42 — STADE 3D (js/stade3d.js) : canvas WebGL + surimpressions façon retransmission TV
+   ===================================================================================== */
+.pitch-wrap.mode3d{height:clamp(250px, 66vw, 340px); background:#03050b; border:1px solid rgba(212,175,55,0.35);
+  box-shadow:0 14px 34px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.04); perspective:none;}
+.pitch-wrap.mode3d::before, .pitch-wrap.mode3d::after{display:none;}
+.pitch-wrap.mode3d > :not(.s3d-layer):not(.s3d-hud):not(.goal-flash){display:none !important;}
+.s3d-layer{position:absolute; inset:0; z-index:1;}
+.s3d-canvas{width:100% !important; height:100% !important; display:block; touch-action:pan-y;}
+.s3d-hud{position:absolute; inset:0; z-index:6; pointer-events:none; font-family:'Barlow Condensed',sans-serif;}
+.s3d-bug{position:absolute; top:8px; left:8px; display:flex; align-items:center; gap:5px;
+  background:linear-gradient(180deg,rgba(16,24,50,0.94),rgba(4,8,18,0.94)); border:1px solid rgba(255,255,255,0.14);
+  border-radius:6px; padding:3px 8px; font-weight:700; font-size:13px; color:#fff; box-shadow:0 3px 10px rgba(0,0,0,0.5);}
+.s3d-chip{width:4px; height:15px; border-radius:2px; box-shadow:0 0 0 1px rgba(255,255,255,0.25);}
+.s3d-sc{background:linear-gradient(180deg,#fff,#dfe4ee); color:#0b1226; padding:0 7px; border-radius:3px;
+  font-family:'Bebas Neue',sans-serif; font-size:17px; letter-spacing:.05em; line-height:19px;}
+.s3d-min{color:var(--gold); margin-left:3px; min-width:30px;}
+.s3d-live{position:absolute; top:36px; left:9px; color:#ff4d5e; font-weight:700; font-size:10.5px; letter-spacing:.12em;
+  text-shadow:0 1px 3px rgba(0,0,0,0.8); animation:s3dBlink 1.6s ease-in-out infinite;}
+.s3d-live.s3d-pre{top:auto; bottom:10px; left:10px; color:#fff; background:rgba(6,10,22,0.7); border-left:3px solid var(--gold);
+  padding:3px 9px; animation:none; letter-spacing:.08em;}
+@keyframes s3dBlink{0%,100%{opacity:1;} 50%{opacity:.45;}}
+.s3d-tools{position:absolute; top:8px; right:8px; display:flex; gap:5px; pointer-events:auto;}
+.s3d-btn, .s3d-enable{background:rgba(6,10,22,0.72); color:#fff; border:1px solid rgba(255,255,255,0.2); border-radius:8px;
+  padding:5px 9px; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:12px; letter-spacing:.03em;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); cursor:pointer;}
+.s3d-btn:active, .s3d-enable:active{transform:scale(0.94); background:rgba(212,175,55,0.35);}
+.s3d-enable{position:absolute; top:8px; right:8px; z-index:11;}
+.s3d-carrier{position:absolute; left:8px; bottom:8px; background:linear-gradient(90deg,rgba(6,10,22,0.88),rgba(6,10,22,0.55));
+  border-left:3px solid var(--gold); padding:3px 10px 3px 8px; font-weight:700; font-size:13.5px; color:#fff;
+  transition:opacity .3s ease; border-radius:0 4px 4px 0; opacity:0;}
+.s3d-carrier b{color:var(--gold); margin-right:5px; font-family:'Bebas Neue',sans-serif; font-size:16px;}
+.pitch-wrap.s3d-fullscreen{position:fixed !important; inset:0; height:100% !important; width:100% !important;
+  z-index:70; border-radius:0; margin:0; border:none;}
+.pitch-wrap.s3d-fullscreen .s3d-bug{top:calc(10px + env(safe-area-inset-top)); left:12px; font-size:15px;}
+.pitch-wrap.s3d-fullscreen .s3d-live{top:calc(42px + env(safe-area-inset-top)); left:13px;}
+.pitch-wrap.s3d-fullscreen .s3d-tools{top:calc(10px + env(safe-area-inset-top)); right:12px;}
+.pitch-wrap.s3d-fullscreen .s3d-carrier{bottom:calc(14px + env(safe-area-inset-bottom)); left:12px;}
+body.s3d-fs-open{overflow:hidden;}
+body.s3d-fs-open .overlay, body.s3d-fs-open .toast-wrap{z-index:90;}
+.s3d-hero{height:clamp(170px, 48vw, 235px); border-radius:16px; overflow:hidden; position:relative; margin:4px 0 14px;
+  border:1px solid rgba(212,175,55,0.3); box-shadow:0 12px 30px rgba(0,0,0,0.5); background:#05080f;}
+.s3d-hero.mode3d{height:clamp(170px, 48vw, 235px);}
+
+/* =====================================================================================
+   v42 — REFONTE VISUELLE 2D : ambiance "soir de match" (halos de projecteurs, verre dépoli,
+   habillage TV). Uniquement de la mise en forme : aucun sélecteur JS ne dépend de ces règles.
+   ===================================================================================== */
+html,body{background:#050914;}
+body{background:
+  radial-gradient(ellipse 70% 38% at 50% -6%, rgba(96,130,255,0.22), transparent 70%),
+  radial-gradient(ellipse 30% 22% at 6% 0%, rgba(255,240,200,0.14), transparent 70%),
+  radial-gradient(ellipse 30% 22% at 94% 0%, rgba(255,240,200,0.14), transparent 70%),
+  linear-gradient(180deg,#070c1c 0%, #050914 60%, #04120c 100%);
+  background-attachment:fixed;}
+#app{background:linear-gradient(180deg, rgba(10,16,36,0.78) 0%, rgba(6,10,22,0.9) 100%);
+  border-left:1px solid rgba(255,255,255,0.04); border-right:1px solid rgba(255,255,255,0.04);
+  box-shadow:0 0 60px rgba(0,0,0,0.6); padding-bottom:92px;}
+.topbar{background:linear-gradient(180deg, rgba(20,30,64,0.9), rgba(8,12,28,0.4));
+  border-bottom:1px solid rgba(212,175,55,0.28); box-shadow:0 1px 0 rgba(255,255,255,0.03), 0 10px 24px -14px rgba(212,175,55,0.35);}
+.brand h1{background:linear-gradient(180deg,#ffffff 20%,#d9c27a 120%); -webkit-background-clip:text; background-clip:text; color:transparent;}
+.player-card, .news-item, .standing-row, .slot-pick, .tactic-bar, .friendly-box{
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);}
+.player-card{background:linear-gradient(135deg, rgba(255,255,255,0.075), rgba(255,255,255,0.018) 70%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.07), 0 8px 20px rgba(0,0,0,0.32);}
+.news-item{box-shadow:inset 0 1px 0 rgba(255,255,255,0.05), 0 6px 16px rgba(0,0,0,0.25);}
+.section-title{letter-spacing:.05em; text-shadow:0 2px 12px rgba(96,130,255,0.25), 0 1px 3px rgba(0,0,0,0.5);}
+.btn-primary{background:linear-gradient(135deg,#f6dd86 0%,#d4af37 45%,#b48b1c 100%); position:relative; overflow:hidden;
+  box-shadow:0 6px 18px rgba(212,175,55,0.35), inset 0 1px 0 rgba(255,255,255,0.5);}
+.btn-primary:not(:disabled)::after{content:''; position:absolute; top:0; bottom:0; width:40%; left:-60%;
+  background:linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent); animation:btnSheen 3.2s ease-in-out infinite;}
+@keyframes btnSheen{0%,60%{left:-60%;} 100%{left:130%;}}
+.scoreboard{background:linear-gradient(180deg,#121b3a 0%,#05080f 100%); border:1px solid rgba(212,175,55,0.35);
+  box-shadow:0 10px 26px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08); position:relative; overflow:hidden;}
+.scoreboard::before{content:''; position:absolute; left:0; right:0; top:0; height:2px;
+  background:linear-gradient(90deg,#0055a4 0 33%,#fff 33% 66%,#ef4135 66%);}
+.sb-score{color:#fff; text-shadow:0 0 18px rgba(212,175,55,0.45);}
+.tabbar{bottom:calc(8px + env(safe-area-inset-bottom)); width:calc(100% - 16px); max-width:464px; border-radius:22px;
+  padding:6px 6px; background:linear-gradient(180deg, rgba(18,26,54,0.86), rgba(8,12,28,0.92));
+  border:1px solid rgba(255,255,255,0.08); box-shadow:0 12px 30px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06);
+  -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);}
+.tab-btn.active{background:linear-gradient(180deg, rgba(212,175,55,0.26), rgba(212,175,55,0.08));
+  box-shadow:inset 0 0 0 1px rgba(212,175,55,0.35), 0 0 14px rgba(212,175,55,0.18);}
+.sheet{background:linear-gradient(165deg, rgba(20,30,62,0.98), rgba(6,10,22,0.99) 120%);
+  box-shadow:0 -16px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);}
+.commentary{scrollbar-width:thin;}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <div class="toast-wrap" id="toastWrap"></div>
 
+<script src="./vendor/three.min.js"></script>
+<script src="./js/stade3d.js"></script>
 <script>
 /* ---------------- DATA ---------------- */
 const PRENOMS = ["Malick","Théo","Bastien","Yanis","Rayan","Enzo","Nathan","Kylian","Amadou","Hugo","Léo","Sacha","Ilyes","Noa","Mattéo","Bilal","Adama","Romain","Karim","Djibril","Gabin","Sofiane","Axel","Moussa","Tom","Ismaël","Younes","Elias","Nolan","Timéo","Andy","Souleymane","Jules","Maxence","Lino","Anas","Mehdi","Kenzo","Ayoub","Owen","Cheikh","Evan","Idris","Bryan","Kais","Yohan","Aboubacar","Loïc","Mahamadou","Wilson","Dorian"];
@@ -5158,6 +5299,7 @@ function renderMatchTab(el){
   el.innerHTML = `
     <div class="eyebrow">${typeLabel(next.type, next)}</div>
     <h2 class="section-title">France 🇫🇷 vs ${next.opp}</h2>
+    <div class="s3d-hero" id="s3dHero"></div>
     ${renderSeriesTrack(next)}
     ${(state.staff.analyste>0) ? `<div class="news-item"><span class="news-tag">📊 Rapport de l'analyste vidéo</span><div class="news-title">${oppTierLabel(next.type)} — préparez votre tactique en conséquence.</div></div>` : ""}
     <div class="tactic-bar" id="openTactics">
@@ -5190,6 +5332,7 @@ function renderMatchTab(el){
       ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶"}
     </button>
   `;
+  mountMatchHero(el, null, next);
   el.querySelector("#openTactics").onclick = openTacticsSheet;
   el.querySelector("#scoutOppBtn").onclick = ()=> openMatchPreviewSheet(next);
   el.querySelector("#tacticAdviceBtn").onclick = ()=> suggestBestTactics(next);
@@ -5813,6 +5956,7 @@ function stopAmbientMotion(m){
 
 function flashResult(m, side, idx){
   if(!isLiveScreenActive(m)) return;
+  if(window.Stade3D) Stade3D.onGoal(m, side, idx);
   SFX.crowdBurst(side==="us", side==="us");
   const gf = document.getElementById("goalFlash");
   if(gf){ gf.classList.remove("show"); void gf.offsetWidth; gf.classList.add("show"); setTimeout(()=> gf.classList.remove("show"), 900); }
@@ -5897,6 +6041,7 @@ async function playSequence(m, side, outcome){
     m.pos.ball.y = clamp(50 + rand(-6,6), 20, 80);
     applyFrame(m);
     if(isLiveScreenActive(m)) SFX.crowdBurst(false, false);
+    if(window.Stade3D) Stade3D.onEvent(m, "save");
     pushEntry(m, {min:m.minute, goal:false, text: ours
       ? `🧤 ARRÊT EXCEPTIONNEL du gardien adverse sur la tentative de ${nameOf(shooterIdx)} !`
       : `🧤 Parade exceptionnelle de notre gardien, ovation du Stade de France !`});
@@ -5906,6 +6051,7 @@ async function playSequence(m, side, outcome){
     applyFrame(m);
     const wrap = document.getElementById("pitchWrap");
     if(isLiveScreenActive(m) && wrap){ wrap.classList.remove("shake"); void wrap.offsetWidth; wrap.classList.add("shake"); setTimeout(()=> wrap.classList.remove("shake"), 400); }
+    if(window.Stade3D) Stade3D.onEvent(m, "post");
     pushEntry(m, {min:m.minute, goal:false, text: ours
       ? `🥴 Le POTEAU repousse la frappe de ${nameOf(shooterIdx)} ! Si près du but...`
       : `😅 ${m.opp} trouve le poteau, la barre transversale sauve les Bleus !`});
@@ -6651,6 +6797,29 @@ function buildLiveMatch(el, m){
   if(subsBtn && m.subsUsed<m.subsMax && !m.finalWhistlePlayed) subsBtn.onclick = ()=> openSubstitutionSheet(m);
   spawnWeatherFx(m);
   if(!m.finalWhistlePlayed) startAmbientMotion(m);
+  mountStade3D(el.querySelector("#pitchWrap"), m);
+}
+
+// v42 : stade 3D (cf. js/stade3d.js). Si WebGL est indisponible ou si le joueur a choisi la vue
+// 2D (bouton "2D" du HUD 3D, préférence en localStorage "sel-view3d"), on garde le terrain 2D
+// historique avec un petit bouton pour repasser en 3D.
+function mountStade3D(wrap, m){
+  if(!wrap || !window.Stade3D || !Stade3D.supported()) return;
+  if(Stade3D.isEnabled() && Stade3D.mount(wrap, m)) return;
+  const b = document.createElement("button");
+  b.className = "s3d-enable"; b.textContent = "🎥 Vue 3D";
+  b.onclick = ()=>{ Stade3D.setEnabled(true); render(); };
+  wrap.appendChild(b);
+}
+function mountMatchHero(el, ctx, next){
+  const hero = el.querySelector("#s3dHero");
+  if(!hero) return;
+  if(!window.Stade3D || !Stade3D.supported() || !Stade3D.isEnabled()){ hero.remove(); return; }
+  const slots = ctx==="club" ? clubSlotsSpec() : slotsSpec();
+  const lineup = ctx==="club" ? state.club.lineup : state.lineup;
+  const usOrder = slots.map(sl=> lineup[sl] ? (ctx==="club" ? state.club.squad : state.squad).find(p=>p.id===lineup[sl]) : null);
+  const key = [ctx||"nat", next.opp, slots.map(sl=>lineup[sl]||"-").join(",")].join("|");
+  if(!Stade3D.mountShowcase(hero, {key, ctx, opp:next.opp, usOrder, weather:next.weather||null})) hero.remove();
 }
 
 function spawnWeatherFx(m){
@@ -7177,6 +7346,7 @@ function renderClubMatchTab(el){
     const style = STYLES[c.tactique.style];
     el.insertAdjacentHTML("beforeend", `
       <div class="eyebrow" style="margin-top:14px;">Prochain match — vs ${next.opp}</div>
+      <div class="s3d-hero" id="s3dHero"></div>
       <div class="tactic-bar" id="openClubTactics">
         <div>
           <div class="tactic-label">Tactique</div>
@@ -7198,6 +7368,7 @@ function renderClubMatchTab(el){
       </button>
       <button class="btn btn-ghost" id="simClubMatchBtn" style="margin-top:8px;">⏩ Simulation rapide (sans direct)</button>
     `);
+    mountMatchHero(el, "club", next);
     el.querySelector("#openClubTactics").onclick = openClubTacticsSheet;
     el.querySelector("#clubScoutOppBtn").onclick = ()=> openMatchPreviewSheet(next);
     el.querySelector("#clubTacticAdviceBtn").onclick = ()=> suggestBestTactics(next);
@@ -7655,7 +7826,22 @@ function showIntroStory(){
 loadGame();
 </script>
 <script>
-if("serviceWorker" in navigator){
+// v42 : dans l'APK Android (Capacitor), PAS de service worker : les fichiers sont déjà embarqués
+// dans l'appli, et un cache "cache d'abord" resservirait l'ancienne version après une mise à jour.
+const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+if(IS_NATIVE_APP){
+  // Bouton retour Android : ferme d'abord la fiche ouverte / le plein écran 3D, sinon met l'appli
+  // en arrière-plan (au lieu de la quitter brutalement en perdant le match en cours à l'écran).
+  const AppPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if(AppPlugin) AppPlugin.addListener("backButton", ()=>{
+    const fs = document.querySelector(".s3d-fullscreen .s3d-btn#s3dFs");
+    if(fs){ fs.click(); return; }
+    if(document.getElementById("overlay")){ closeSheet(); return; }
+    AppPlugin.minimizeApp();
+  });
+  document.addEventListener("pause", ()=>{ try{ flushSaveNow(); }catch(e){} });
+}
+if(!IS_NATIVE_APP && "serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
     navigator.serviceWorker.register("./sw.js").catch(err=>console.warn("Enregistrement du service worker impossible :", err));
   });
