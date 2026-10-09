@@ -704,6 +704,18 @@ ATTENTION si vous reprenez ce chantier : toute nouvelle action de jeu qui dépla
 m.pos doit AUSSI appeler s3dAction (sinon le ballon 3D ne la jouera pas) et mettre à jour
 m.lastHolder. Stade3D._debug() expose l'état du ballon et de la file (utile pour les tests ;
 window.__S3D_MAXDT permet de compenser un rendu logiciel lent en test).
+
+v46 — Demande de Julien : "change tous les designs de l'appli sauf les matchs". [FAIT] :
+- Nouveau thème "Matchday" (dernier bloc CSS "v46 — NOUVEAU DESIGN") : fond graphite, cartes
+  pleines arrondies, bleu électrique (--blue) + rouge (--red), titres Barlow Condensed italique,
+  postes colorés (GB orange, DEF bleu, MIL vert, ATT rouge), boutons pleins bleus, sous-navigation
+  et réglages à pastille bleue, barre d'onglets à icônes monochromes qui s'allument.
+- Portée : toutes les règles sont préfixées par body:not(.in-live). buildLiveMatch() ajoute
+  body.in-live et render() le retire : le MATCH EN DIRECT (terrain 2D/3D, tableau d'affichage,
+  commentaires, mi-temps, remplacements) garde exactement son design v45, comme demandé.
+ATTENTION si vous reprenez ce chantier : pour styler un nouvel écran hors match, préfixez aussi par
+body:not(.in-live) (sinon la règle s'appliquerait au match). Les variables --gold/--chalk/--line
+sont redéfinies dans ce thème hors match.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1637,6 +1649,124 @@ body{background:
 .tab-btn .ic{font-size:20px; filter:saturate(0.7); transition:transform .2s, filter .2s;}
 .tab-btn.active .ic{filter:saturate(1.2) drop-shadow(0 0 6px rgba(212,175,55,0.6)); transform:translateY(-1px);}
 .tab-btn.active::after{content:''; position:absolute; bottom:2px; left:30%; right:30%; height:3px; border-radius:2px; background:var(--gold); box-shadow:0 0 8px var(--gold);}
+
+/* =====================================================================================
+   v46 — NOUVEAU DESIGN DE L'APPLI ("Matchday") : graphite, bleu électrique, rouge, cartes pleines,
+   titres condensés italiques. Tout est préfixé par body:not(.in-live) (= body:not(.in-live)) : le MATCH EN DIRECT
+   (buildLiveMatch ajoute body.in-live) garde volontairement son design précédent.
+   ===================================================================================== */
+body:not(.in-live) {
+  --bg:#0a0c11; --bg-2:#0f121a; --card:#161a24; --card-2:#1c2130; --card-3:#232a3c;
+  --ink:#f3f6fb; --ink-2:#a9b2c6; --ink-3:#6f7a92; --blue:#3d7bff; --blue-2:#6aa0ff; --red:#ff3b4e; --green:#2bd47d; --amber:#ffb020;
+  --gold:#ffcc3d; --line:rgba(255,255,255,0.07); --chalk:#a9b2c6;
+  background:var(--bg) !important;
+}
+body:not(.in-live) #app{background:var(--bg); border:none; box-shadow:none; padding-bottom:96px;}
+body:not(.in-live) .screen{padding:16px 16px 24px;}
+/* Typographie */
+body:not(.in-live) .section-title, body:not(.in-live) h2{font-family:'Barlow Condensed',sans-serif; font-weight:700; font-style:italic; text-transform:uppercase;
+  letter-spacing:.01em; text-shadow:none;}
+body:not(.in-live) .section-title{font-size:32px; line-height:1; margin:4px 0 14px;}
+body:not(.in-live) .eyebrow{font-family:'Barlow',sans-serif; font-weight:700; font-size:11px; letter-spacing:.16em; color:var(--blue-2);}
+body:not(.in-live) .eyebrow::before{width:6px; height:6px; border-radius:50%; background:var(--red); box-shadow:none;}
+body:not(.in-live) .formation-note, body:not(.in-live) .potential-note{color:var(--ink-2);}
+body:not(.in-live) .empty-note{color:var(--ink-3);}
+/* En-tête */
+body:not(.in-live) .topbar{background:var(--bg-2); border-bottom:1px solid var(--line); box-shadow:none; padding:12px 16px 12px;}
+body:not(.in-live) .brand-logo{border-radius:50%; box-shadow:0 0 0 2px var(--blue), 0 0 0 4px rgba(61,123,255,0.25);}
+body:not(.in-live) .brand-txt h1, body:not(.in-live) .brand h1{background:none; -webkit-background-clip:initial; background-clip:initial; color:var(--ink);
+  font-family:'Barlow Condensed',sans-serif; font-weight:700; font-style:italic; font-size:24px; letter-spacing:.01em; text-transform:uppercase;}
+body:not(.in-live) .brand-sub{color:var(--ink-3); letter-spacing:.08em;}
+body:not(.in-live) .icon-cluster{background:var(--card); border:1px solid var(--line); border-radius:14px;}
+body:not(.in-live) .icon-cluster .close-x{border-radius:10px;}
+body:not(.in-live) .record{background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:none; color:var(--ink);}
+body:not(.in-live) .record b{color:var(--ink);}
+body:not(.in-live) .record .rk{color:var(--blue-2); opacity:1;}
+/* Cartes génériques */
+body:not(.in-live) .player-card, body:not(.in-live) .news-item, body:not(.in-live) .staff-card, body:not(.in-live) .stat-box, body:not(.in-live) .scout-card, body:not(.in-live) .tactic-bar, body:not(.in-live) .slot-pick, body:not(.in-live) .opp-lineup,
+body:not(.in-live) .set-card, body:not(.in-live) .friendly-box, body:not(.in-live) .info-chip{
+  background:var(--card) !important; border:1px solid var(--line) !important; border-radius:18px; box-shadow:none !important;
+  -webkit-backdrop-filter:none; backdrop-filter:none;}
+body:not(.in-live) .player-card{padding:12px 14px; margin-bottom:10px;}
+body:not(.in-live) .player-card::after{display:none;}
+body:not(.in-live) .player-card:active{background:var(--card-2) !important; transform:scale(0.985);}
+body:not(.in-live) .player-card.special{border-color:rgba(255,204,61,0.45) !important; background:linear-gradient(100deg, rgba(255,204,61,0.12), var(--card) 55%) !important;}
+body:not(.in-live) .player-card.doped-card{border-color:rgba(165,87,224,0.6) !important;}
+body:not(.in-live) .player-card.banned-card{border-color:rgba(255,59,78,0.6) !important;}
+body:not(.in-live) .pc-name{font-weight:700; font-size:15.5px;}
+body:not(.in-live) .pc-sub{color:var(--ink-3);}
+body:not(.in-live) .pos-badge{border-radius:12px; width:40px; height:40px; font-size:13px; border:none; box-shadow:none; font-family:'Barlow Condensed'; font-style:italic;}
+body:not(.in-live) .pos-GB{background:linear-gradient(160deg,#ffb020,#c77a00);}
+body:not(.in-live) .pos-DEF{background:linear-gradient(160deg,#3d7bff,#1f4fc7);}
+body:not(.in-live) .pos-MIL{background:linear-gradient(160deg,#2bd47d,#169454);}
+body:not(.in-live) .pos-ATT{background:linear-gradient(160deg,#ff3b4e,#c4162a);}
+body:not(.in-live) .stat-pill{background:var(--card-3); border:none; box-shadow:none; width:30px; height:30px; font-size:12.5px;}
+body:not(.in-live) .stat-pill.cote{background:rgba(255,204,61,0.16); color:var(--gold);}
+body:not(.in-live) .stat-pill.hi{color:var(--green);} body:not(.in-live) .stat-pill.lo{color:#ff7d8a;}
+body:not(.in-live) .stat-box .num{font-family:'Barlow Condensed'; font-weight:700; font-style:italic; font-size:28px; color:var(--ink);}
+body:not(.in-live) .stat-box .lab{color:var(--ink-3); letter-spacing:.06em;}
+body:not(.in-live) .stat-box-clickable:active{background:var(--card-2) !important;}
+body:not(.in-live) .news-item{padding:14px;}
+body:not(.in-live) .news-tag{color:var(--blue-2); background:rgba(61,123,255,0.12); border:none; border-radius:8px;}
+body:not(.in-live) .news-title{color:var(--ink);}
+body:not(.in-live) .standing-row{background:transparent !important; border-radius:0; border-bottom:1px solid var(--line); padding:12px 4px;}
+body:not(.in-live) .standing-row.fr-row{background:rgba(61,123,255,0.10) !important; border-radius:12px; border-bottom-color:transparent;}
+body:not(.in-live) .tag{border-radius:8px; letter-spacing:.04em;}
+body:not(.in-live) .tag.W{background:rgba(43,212,125,0.15); color:var(--green);}
+body:not(.in-live) .tag.D{background:rgba(255,176,32,0.15); color:var(--amber);}
+body:not(.in-live) .tag.L{background:rgba(255,59,78,0.15); color:#ff7d8a;}
+body:not(.in-live) .tag.pending{background:var(--card-3); color:var(--ink-2);}
+/* Barres de progression */
+body:not(.in-live) .bar-track{background:var(--card-3); height:7px;}
+body:not(.in-live) .bar-fill{background:linear-gradient(90deg,#1f4fc7,var(--blue)); box-shadow:none;}
+body:not(.in-live) .bar-fill.def{background:linear-gradient(90deg,#169454,var(--green));}
+body:not(.in-live) .bar-fill.form{background:linear-gradient(90deg,#c77a00,var(--amber));}
+body:not(.in-live) .bar-label{color:var(--ink-3);}
+/* Boutons */
+body:not(.in-live) .btn{border-radius:14px; font-family:'Barlow Condensed'; font-weight:700; font-style:italic; letter-spacing:.04em; font-size:16px; padding:13px 16px;}
+body:not(.in-live) .btn-primary{background:var(--blue) !important; color:#fff !important; box-shadow:0 8px 22px rgba(61,123,255,0.35) !important;}
+body:not(.in-live) .btn-primary::after{display:none;}
+body:not(.in-live) .btn-primary:disabled{background:var(--card-3) !important; color:var(--ink-3) !important; box-shadow:none !important;}
+body:not(.in-live) .btn-ghost{background:var(--card); border:1px solid var(--line); color:var(--ink);}
+body:not(.in-live) .btn-ghost:active{background:var(--card-2);}
+body:not(.in-live) .btn-soin{background:var(--card-2); border:1px solid var(--line); color:var(--ink); border-radius:14px; box-shadow:none;
+  font-family:'Barlow Condensed'; font-style:italic;}
+body:not(.in-live) .btn-soin:disabled{opacity:.45;}
+body:not(.in-live) .tactic-label{color:var(--blue-2);}
+body:not(.in-live) .slot-pick.filled{border-color:rgba(43,212,125,0.45) !important; background:linear-gradient(90deg, rgba(43,212,125,0.10), var(--card) 60%) !important;}
+body:not(.in-live) .slot-group h3, body:not(.in-live) .set-title{color:var(--blue-2);}
+/* Sous-navigation */
+body:not(.in-live) .subnav{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:4px;}
+body:not(.in-live) .subnav-btn{color:var(--ink-2); font-family:'Barlow Condensed'; font-style:italic; border-radius:12px;}
+body:not(.in-live) .subnav-btn.active{background:var(--blue); color:#fff; box-shadow:0 6px 16px rgba(61,123,255,0.35);}
+/* Champs */
+body:not(.in-live) input[type="text"], body:not(.in-live) input[type="search"], body:not(.in-live) input:not([type]), body:not(.in-live) select{background:var(--card) !important; border:1px solid var(--line) !important;
+  border-radius:14px !important; color:var(--ink) !important;}
+body:not(.in-live) input[type="checkbox"]{accent-color:var(--blue);}
+/* Fiches */
+body:not(.in-live) .overlay{background:rgba(5,7,12,0.7);}
+body:not(.in-live) .sheet{background:var(--bg-2); border-top:none; border-radius:28px 28px 0 0; box-shadow:0 -20px 60px rgba(0,0,0,0.6);}
+body:not(.in-live) .sheet::before{background:var(--card-3);}
+body:not(.in-live) .sheet-head{border-bottom-color:var(--line);}
+body:not(.in-live) .sheet-head .close-x{background:var(--card); border-color:var(--line);}
+body:not(.in-live) .seg{background:var(--card-2); border-color:var(--line);}
+body:not(.in-live) .seg-btn{color:var(--ink-2); font-style:italic;}
+body:not(.in-live) .seg-btn.on{background:var(--blue); color:#fff; box-shadow:0 4px 12px rgba(61,123,255,0.35);}
+body:not(.in-live) .switch.on{background:var(--blue);}
+body:not(.in-live) .set-ic{background:var(--card-3);}
+/* Barre d'onglets */
+body:not(.in-live) .tabbar{background:rgba(15,18,26,0.96); border:1px solid var(--line); border-radius:24px; box-shadow:0 14px 34px rgba(0,0,0,0.6);}
+body:not(.in-live) .tab-btn{color:var(--ink-3); font-family:'Barlow',sans-serif; font-weight:600; font-size:9.5px; text-transform:none; letter-spacing:0;}
+body:not(.in-live) .tab-btn .ic{filter:grayscale(1) brightness(1.2); opacity:.7;}
+body:not(.in-live) .tab-btn.active{background:rgba(61,123,255,0.14); color:#fff; box-shadow:none;}
+body:not(.in-live) .tab-btn.active .ic{filter:none; opacity:1; transform:translateY(-1px) scale(1.08);}
+body:not(.in-live) .tab-btn.active::after{background:var(--blue); box-shadow:0 0 10px var(--blue); left:38%; right:38%;}
+/* Avant-match */
+body:not(.in-live) .s3d-hero{border:none; border-radius:20px; box-shadow:0 14px 30px rgba(0,0,0,0.5);}
+body:not(.in-live) .opp-lineup-head b{color:var(--ink);} body:not(.in-live) .opp-pos{color:var(--red);}
+body:not(.in-live) .action-btn{background:var(--card-2); border:1px solid var(--line); border-radius:14px; color:var(--ink);}
+body:not(.in-live) .action-btn:active{background:var(--card-3); border-color:rgba(61,123,255,0.5);}
+body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .info-chip .ic-lab{color:var(--ink-3);}
 </style>
 </head>
 <body>
@@ -4128,6 +4258,7 @@ function render(){
   }
   pendingBgRender = false;
   ps_lastTab = "apercu";
+  document.body.classList.remove("in-live");   // v46 : le thème "hors match" s'applique (cf. buildLiveMatch)
   const app = document.getElementById("app");
 
   app.innerHTML = `
@@ -7324,6 +7455,7 @@ function showFinalButton(m){
 
 function buildLiveMatch(el, m){
   const isClub = m.ctx === "club";
+  document.body.classList.add("in-live");      // v46 : le match en direct garde son design d'origine
   if(!m.formPos){ const spec = isClub ? FORMATIONS[state.club.tactique.formation].spec : FORMATIONS[state.tactique.formation].spec; m.formPos = buildFormPos(spec); }
   if(!m.usOrder){
     const slots = isClub ? clubSlotsSpec() : slotsSpec();
