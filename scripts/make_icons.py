@@ -103,5 +103,6 @@ if __name__ == "__main__":
     import glob
     for f in glob.glob("android/app/src/main/res/drawable*/splash.png"):
         w, h = Image.open(f).size
-        splash(w, h).save(f)
+        # v43 : écran natif NOIR (enchaîne sur le logo SuperEssence affiché par le jeu)
+        Image.new("RGB", (w, h), (0, 0, 0)).save(f)
     print("écrans de démarrage OK")

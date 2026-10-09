@@ -1,11 +1,11 @@
 // Service worker (version web/PWA uniquement — désactivé dans l'APK, cf. IS_NATIVE_APP dans index.html).
 // Stratégie "cache d'abord, réseau en secours" + mise à jour en tâche de fond.
 // INCRÉMENTER CACHE_NAME à chaque version déployée, sinon les visiteurs gardent l'ancienne.
-const CACHE_NAME = "selectionneur-v42";
+const CACHE_NAME = "selectionneur-v43";
 const PRECACHE = [
   "./", "./index.html", "./manifest.json",
   "./vendor/three.min.js", "./js/stade3d.js", "./fonts/fonts.css",
-  "./icons/icon-192.png", "./icons/icon-512.png",
+  "./icons/icon-192.png", "./icons/icon-512.png", "./img/superessence.png",
 ];
 self.addEventListener("install", (e)=>{
   e.waitUntil(caches.open(CACHE_NAME).then(c=> c.addAll(PRECACHE)).then(()=> self.skipWaiting()));

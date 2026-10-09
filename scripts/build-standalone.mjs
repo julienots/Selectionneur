@@ -18,6 +18,10 @@ for (const src of ["vendor/three.min.js", "js/stade3d.js"]) {
 let css = readFileSync("www/fonts/fonts.css", "utf8");
 css = css.replace(/url\(\.\/([^)]+)\)/g, (_, f) => `url(data:font/woff2;base64,${readFileSync("www/fonts/" + f).toString("base64")})`);
 html = html.replace(`<link rel="stylesheet" href="./fonts/fonts.css">`, () => `<style>\n${css}</style>`);
+// images de l'écran de démarrage en data: URI
+for (const img of ["img/superessence.png", "icons/icon-192.png"]) {
+  html = html.split(`src="./${img}"`).join(`src="data:image/png;base64,${readFileSync("www/" + img).toString("base64")}"`);
+}
 mkdirSync("dist", { recursive: true });
 const out = `dist/selectionneur_v${vNum}.html`;
 writeFileSync(out, html);

@@ -626,6 +626,23 @@ ATTENTION si vous reprenez ce chantier : le moteur 3D est purement "spectateur".
 le format de `m.pos` (pourcentages, x = longueur, nos joueurs attaquent vers x=95) ou les index
 des gardiens (index 0), `syncTargets()`/`updateBall()` de stade3d.js doivent suivre. Le TV-cam est
 placé à HW+26 m / 17 m de haut : ne pas le reculer, il finirait DANS la tribune (écran gris).
+
+v43 — Demande de Julien : "mets un chargement au jeu stylé. Mode portrait : le studio SuperEssence
+puis le chargement du jeu". [FAIT] :
+- `<div id="boot">` placé tout en haut du body (s'affiche avant l'exécution du gros script), CSS
+  "v43 — ÉCRANS DE DÉMARRAGE" en fin de style, pensé pour le portrait.
+- Scène 1 : logo du studio (www/img/superessence.png, découpé du visuel fourni, fond rendu
+  transparent) qui apparaît en zoom/flou puis reflet lumineux, avec "présente". Un tap le passe.
+- Scène 2 : écran de chargement "SÉLECTIONNEUR" (faisceaux de projecteurs animés, tribune,
+  pelouse en perspective, barre de progression dorée, astuces tournantes `BOOT_TIPS`, crédit
+  "un jeu SuperEssence."). Les étapes sont réelles : polices (document.fonts.ready), puis
+  `Stade3D.warmup()` qui crée le renderer et compile les shaders du stade pendant la barre.
+- Pilotage : `runBootSequence()` appelée juste après `loadGame()` en fin de script ; #boot est
+  retiré du DOM à la fin (fondu). Le prologue d'intro (nouvelle partie) apparaît dessous ensuite.
+- APK : écran de démarrage natif Android passé en noir sans icône (styles.xml + splash.png) pour
+  enchaîner directement sur le logo du studio sans "flash" d'une autre image.
+ATTENTION si vous reprenez ce chantier : la séquence dure ~6 s à chaque lancement ; si Julien la
+trouve trop longue, raccourcir les `wait(2900)` / `delay(...)` de runBootSequence().
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1357,9 +1374,115 @@ body{background:
 .sheet{background:linear-gradient(165deg, rgba(20,30,62,0.98), rgba(6,10,22,0.99) 120%);
   box-shadow:0 -16px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);}
 .commentary{scrollbar-width:thin;}
+
+/* =====================================================================================
+   v43 — ÉCRANS DE DÉMARRAGE (portrait) : logo studio SuperEssence puis chargement du jeu.
+   Le HTML est tout en haut du body (#boot) pour s'afficher AVANT l'exécution du gros script ;
+   la séquence est pilotée par runBootSequence() en fin de script.
+   ===================================================================================== */
+#boot{position:fixed; inset:0; z-index:9999; background:#000; overflow:hidden; touch-action:none;
+  font-family:'Barlow Condensed',system-ui,sans-serif;}
+#boot.boot-out{opacity:0; transition:opacity .6s ease; pointer-events:none;}
+.boot-studio{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  background:#000; transition:opacity .7s ease;}
+.boot-studio.hide{opacity:0; pointer-events:none;}
+.boot-studio-logo{width:min(78vw, 420px); height:auto; opacity:0; transform:scale(.82); filter:blur(10px);
+  animation:studioIn 1.1s cubic-bezier(.2,.9,.25,1.15) .25s forwards;
+  -webkit-mask-image:linear-gradient(100deg,#000 40%,rgba(0,0,0,.55) 50%,#000 60%); -webkit-mask-size:300% 100%;
+  mask-image:linear-gradient(100deg,#000 40%,rgba(0,0,0,.55) 50%,#000 60%); mask-size:300% 100%;}
+.boot-studio-logo.shine{animation:studioIn 1.1s cubic-bezier(.2,.9,.25,1.15) .25s forwards, studioShine 1.1s ease-in-out 1.4s 1;}
+@keyframes studioIn{to{opacity:1; transform:scale(1); filter:blur(0);}}
+@keyframes studioShine{from{-webkit-mask-position:100% 0; mask-position:100% 0;} to{-webkit-mask-position:0 0; mask-position:0 0;}}
+.boot-studio-sub{margin-top:14px; color:#8a8a8a; letter-spacing:.5em; text-transform:uppercase; font-size:12px; font-weight:600;
+  opacity:0; animation:fadeUp .7s ease 1.3s forwards; padding-left:.5em;}
+@keyframes fadeUp{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;}}
+
+.boot-load{position:absolute; inset:0; opacity:0; transition:opacity .7s ease; display:flex; flex-direction:column;
+  background:radial-gradient(ellipse 90% 45% at 50% 0%, #1d2d63 0%, #0a1129 45%, #04070f 100%);}
+.boot-load.show{opacity:1;}
+.boot-beams{position:absolute; inset:0; pointer-events:none;}
+.boot-beams i{position:absolute; top:-10%; width:34vw; height:85%; transform-origin:50% 0;
+  background:linear-gradient(180deg, rgba(255,246,210,.30), rgba(255,246,210,0) 85%); filter:blur(6px);
+  animation:beam 5s ease-in-out infinite;}
+.boot-beams i:nth-child(1){left:-12%; --r:-28deg; animation-delay:0s;}
+.boot-beams i:nth-child(2){left:14%;  --r:-12deg; animation-delay:-1.2s; opacity:.7;}
+.boot-beams i:nth-child(3){right:14%; --r:12deg;  animation-delay:-2.4s; opacity:.7;}
+.boot-beams i:nth-child(4){right:-12%;--r:28deg;  animation-delay:-3.6s;}
+@keyframes beam{0%,100%{transform:rotate(var(--r));} 50%{transform:rotate(calc(var(--r) * .6));}}
+.boot-crowd{position:absolute; left:0; right:0; top:30%; height:16%; opacity:.5;
+  background:radial-gradient(circle at 3px 3px, rgba(255,255,255,.55) 1.2px, transparent 1.6px) 0 0/9px 9px,
+             radial-gradient(circle at 3px 3px, rgba(239,65,53,.6) 1.2px, transparent 1.6px) 4px 4px/13px 11px,
+             radial-gradient(circle at 3px 3px, rgba(60,110,230,.7) 1.2px, transparent 1.6px) 2px 6px/11px 9px;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 40%,#000 70%,transparent);
+  mask-image:linear-gradient(180deg,transparent,#000 40%,#000 70%,transparent);
+  animation:crowdFlash 1.4s steps(2) infinite;}
+@keyframes crowdFlash{50%{opacity:.62;}}
+.boot-pitch{position:absolute; left:-30%; right:-30%; bottom:-4%; height:30%; transform:perspective(700px) rotateX(38deg);
+  transform-origin:50% 100%;
+  background:repeating-linear-gradient(90deg,#1f5a2a 0 7%, #276b33 7% 14%);
+  box-shadow:inset 0 40px 60px -20px rgba(0,0,0,.8);}
+.boot-pitch::before{content:''; position:absolute; left:50%; top:8%; width:26%; height:60%; transform:translateX(-50%);
+  border:3px solid rgba(255,255,255,.55); border-radius:50%;}
+.boot-pitch::after{content:''; position:absolute; left:50%; top:0; bottom:0; width:3px; background:rgba(255,255,255,.55);}
+.boot-center{position:relative; z-index:2; flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding-top:4vh;}
+.boot-ball{width:96px; height:96px; border-radius:24px; overflow:hidden; box-shadow:0 0 0 1px rgba(212,175,55,.5), 0 0 40px rgba(212,175,55,.35), 0 18px 40px rgba(0,0,0,.6);
+  animation:ballDrop .9s cubic-bezier(.3,1.5,.5,1) both;}
+.boot-ball img{width:100%; height:100%; display:block;}
+@keyframes ballDrop{from{transform:translateY(-60px) scale(.6); opacity:0;} to{transform:none; opacity:1;}}
+.boot-eyebrow{margin-top:22px; color:#d4af37; letter-spacing:.32em; text-transform:uppercase; font-size:12.5px; font-weight:700;
+  animation:fadeUp .6s ease .3s both; padding-left:.32em;}
+.boot-title{margin:4px 0 0; font-family:'Bebas Neue',system-ui,sans-serif; font-weight:400; font-size:clamp(46px, 14vw, 66px);
+  letter-spacing:.06em; line-height:1; background:linear-gradient(180deg,#ffffff 30%,#e8d38a 70%,#b48b1c);
+  -webkit-background-clip:text; background-clip:text; color:transparent; filter:drop-shadow(0 4px 14px rgba(0,0,0,.7));
+  animation:titleIn .8s cubic-bezier(.2,.9,.25,1.1) .4s both;}
+@keyframes titleIn{from{opacity:0; letter-spacing:.4em;} to{opacity:1; letter-spacing:.06em;}}
+.boot-flag{margin-top:12px; width:84px; height:4px; border-radius:2px; background:linear-gradient(90deg,#0055a4 33%,#fff 33% 66%,#ef4135 66%);
+  animation:fadeUp .6s ease .7s both;}
+.boot-bottom{position:relative; z-index:3; padding:0 28px calc(24vh + env(safe-area-inset-bottom)); text-align:center;}
+.boot-step{color:#e9edf6; font-size:14px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px;
+  text-shadow:0 2px 6px rgba(0,0,0,.8);}
+.boot-bar{height:8px; border-radius:6px; background:rgba(0,0,0,.55); box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); overflow:hidden;}
+.boot-fill{height:100%; width:0%; border-radius:6px; transition:width .35s ease;
+  background:linear-gradient(90deg,#b48b1c,#f6dd86,#d4af37); box-shadow:0 0 14px rgba(246,221,134,.7); position:relative; overflow:hidden;}
+.boot-fill::after{content:''; position:absolute; inset:0; background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.7) 50%,transparent 70%);
+  background-size:200% 100%; animation:fillSheen 1.2s linear infinite;}
+@keyframes fillSheen{from{background-position:150% 0;} to{background-position:-50% 0;}}
+.boot-tip{min-height:36px; margin-top:12px; color:#c9d1e3; font-family:'Barlow',system-ui,sans-serif; font-size:13px; line-height:1.4;
+  text-shadow:0 2px 6px rgba(0,0,0,.9); transition:opacity .3s ease;}
+.boot-credit{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(18px + env(safe-area-inset-bottom)); white-space:nowrap;
+  color:rgba(255,255,255,.75); font-size:11px; letter-spacing:.2em; text-transform:uppercase; background:rgba(0,0,0,.6);
+  padding:6px 14px; border-radius:20px; box-shadow:0 0 0 1px rgba(255,255,255,.1);}
+.boot-credit b{color:#fff; letter-spacing:.04em; text-transform:none; font-size:13px;}
+.boot-credit b span{color:#fcca1e;}
+@media (prefers-reduced-motion: reduce){ #boot *{animation-duration:.01s !important; animation-delay:0s !important;} }
 </style>
 </head>
 <body>
+<div id="boot" aria-hidden="true">
+  <div class="boot-studio" id="bootStudio">
+    <img class="boot-studio-logo" src="./img/superessence.png" alt="SuperEssence">
+    <div class="boot-studio-sub">présente</div>
+  </div>
+  <div class="boot-load" id="bootLoad">
+    <div class="boot-beams"><i></i><i></i><i></i><i></i></div>
+    <div class="boot-crowd"></div>
+    <div class="boot-center">
+      <div class="boot-ball"><img src="./icons/icon-192.png" alt=""></div>
+      <div class="boot-eyebrow">Manager de foot 3D</div>
+      <h1 class="boot-title">SÉLECTIONNEUR</h1>
+      <div class="boot-flag"></div>
+    </div>
+    <div class="boot-bottom">
+      <div class="boot-step" id="bootStep">Ouverture du stade…</div>
+      <div class="boot-bar"><div class="boot-fill" id="bootFill"></div></div>
+      <div class="boot-tip" id="bootTip"></div>
+      <div class="boot-credit">un jeu <b>Super<span>Essence</span>.</b></div>
+    </div>
+    <div class="boot-pitch"></div>
+  </div>
+</div>
+
 <div id="app"></div>
 <div class="toast-wrap" id="toastWrap"></div>
 
@@ -7824,6 +7947,54 @@ function showIntroStory(){
 }
 
 loadGame();
+
+// v43 : séquence de démarrage — logo du studio SuperEssence, puis écran de chargement du jeu
+// (barre de progression réelle : polices, sauvegarde, préchauffage du stade 3D). Un tap sur le
+// logo du studio passe directement au chargement. #boot est retiré du DOM à la fin.
+const BOOT_TIPS = [
+  "Astuce : le bouton 🎥 pendant le match change de caméra (TV, Proche, Tribune, Drone).",
+  "Astuce : ⛶ met le match en plein écran — tournez le téléphone pour le grand angle.",
+  "Astuce : le scouting adverse révèle la tactique de l'adversaire avant le coup d'envoi.",
+  "Astuce : à la mi-temps, changez de style de jeu pour contrer le système adverse.",
+  "Astuce : une Coupe du Monde gagnée débloque les joueurs Élite ★★★.",
+  "Astuce : ménagez vos cadres, la fatigue fait chuter la forme et grimper les blessures.",
+];
+async function runBootSequence(){
+  const boot = document.getElementById("boot");
+  if(!boot) return;
+  const studio = document.getElementById("bootStudio"), load = document.getElementById("bootLoad");
+  const fill = document.getElementById("bootFill"), step = document.getElementById("bootStep"), tip = document.getElementById("bootTip");
+  const logo = studio.querySelector(".boot-studio-logo");
+  if(logo) logo.classList.add("shine");
+  let skip = false;
+  studio.onclick = ()=>{ skip = true; };
+  const wait = async (ms)=>{ const t0 = Date.now(); while(!skip && Date.now()-t0 < ms) await delay(50); };
+  await wait(2900);
+  skip = false;
+  studio.classList.add("hide");
+  load.classList.add("show");
+  let tipIdx = Math.floor(Math.random()*BOOT_TIPS.length);
+  tip.textContent = BOOT_TIPS[tipIdx];
+  const tipTimer = setInterval(()=>{ tip.style.opacity = 0; setTimeout(()=>{ tipIdx=(tipIdx+1)%BOOT_TIPS.length; tip.textContent = BOOT_TIPS[tipIdx]; tip.style.opacity = 1; }, 300); }, 2600);
+  const setP = (p, label)=>{ fill.style.width = p+"%"; if(label) step.textContent = label; };
+  await delay(500);
+  setP(18, "Chargement des polices…");
+  try{ if(document.fonts && document.fonts.ready) await Promise.race([document.fonts.ready, delay(1500)]); }catch(e){}
+  await delay(350);
+  setP(40, "Lecture de votre carrière…");
+  await delay(450);
+  setP(62, "Construction du stade 3D…");
+  await delay(60);
+  try{ if(window.Stade3D) Stade3D.warmup(); }catch(e){}
+  setP(84, "Allumage des projecteurs…");
+  await delay(650);
+  setP(100, "Entrée des joueurs !");
+  await delay(700);
+  clearInterval(tipTimer);
+  boot.classList.add("boot-out");
+  setTimeout(()=> boot.remove(), 650);
+}
+runBootSequence();
 </script>
 <script>
 // v42 : dans l'APK Android (Capacitor), PAS de service worker : les fichiers sont déjà embarqués

@@ -1305,6 +1305,18 @@
     camState.goalCam = 3.2;
   };
 
+  // Écran de chargement : crée le renderer et compile les shaders du stade pendant la barre de
+  // progression, pour que le premier match/avant-match s'affiche sans à-coup.
+  S.warmup = function(){
+    if(!S.supported() || !S.isEnabled()) return false;
+    try{
+      if(!renderer) initRenderer();
+      camera.position.set(0, 17, HW+26); camera.lookAt(0,0,0);
+      renderer.compile(scene, camera);
+      return true;
+    }catch(e){ console.warn("Préchargement 3D impossible :", e); return false; }
+  };
+
   S.onEvent = function(m, kind){
     if(!cur || cur.m !== m || !teams) return;
     if(kind === "post"){ world.goalPulse = Math.max(world.goalPulse, 0.35); }
