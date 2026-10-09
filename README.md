@@ -7,7 +7,7 @@ géants, joueurs animés, caméras façon retransmission TV.
 ## 📱 Installer l'APK sur Android
 
 1. Sur le téléphone, ouvrez la page **Releases** du dépôt (colonne de droite sur GitHub).
-2. Téléchargez `Selectionneur-v4.4.0.apk` dans la release la plus récente.
+2. Téléchargez `Selectionneur-v4.5.0.apk` dans la release la plus récente.
 3. Ouvrez le fichier et autorisez « l'installation d'applications inconnues » si Android le demande.
 
 Les nouvelles versions s'installent **par-dessus** l'ancienne (même signature) : la sauvegarde est conservée.

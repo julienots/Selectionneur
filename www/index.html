@@ -675,6 +675,35 @@ joueurs". [FAIT] :
 ATTENTION si vous reprenez ce chantier : l'effectif FRANÇAIS de départ reste majoritairement généré
 (REAL_INJECT_CAP volontairement bas depuis une version précédente, pour l'équilibrage). Les rosters
 réels sont figés à l'automne 2026 : à mettre à jour à la main dans OPP_ROSTERS si besoin.
+
+v45 — Demande de Julien : "refonte de tous les menus et options, modifie tout, matchs encore plus
+réalistes : il faut vraiment qu'ils touchent le ballon, dribblent vraiment, précis". [FAIT] :
+- BALLON AU PIED EN 3D (stade3d.js, bloc "ballon (v45 : vrai contrôle au pied)") : le moteur de match
+  envoie des actions via s3dAction(m,{kind,...}) -> Stade3D.onAction ; elles sont jouées dans
+  l'ordre par stepAction() : gain / intercept (course au ballon, tacle au contact), pass (le passeur
+  va au ballon, arme, le ballon part de son pied vers le POINT DE RENCONTRE atteignable par le
+  receveur, qui le contrôle), dribble (crochet, passement, petit pont, roulette : défenseur qui sort,
+  feinte, ballon emmené sur le côté, défenseur déséquilibré), shot (élan, frappe, issue réelle : filet,
+  parade avec ballon dans les gants, poteau, sortie...), foul, kickoff (attaquant au rond central).
+  Conduite de balle : touches synchronisées avec la course (BS.ahead/BS.bs), pied alterné. Le
+  porteur avance avec le ballon, le défenseur le plus proche vient presser (syncTargets).
+  La célébration démarre quand le ballon touche le filet (pendingGoal). Si la file d'actions
+  s'allonge (rythme Rapide, téléphone lent), timeScale accélère et les actions passent en "rush".
+- MOTEUR DE MATCH (index.html) : continuité de possession (m.lastHolder, setHolder/startHolder :
+  le jeu reprend du dernier porteur, une perte de balle devient une interception) ; phase de dribble
+  dans playSequence (DRIBBLE_MOVES, commentée avec les deux noms) ; l'attente entre deux passes est
+  calculée sur la distance réelle et la vitesse de la passe (même table PASS_SPEED qu'en 3D).
+- MENUS / OPTIONS : nouvel écran Réglages (renderSettingsPanels/bindSettingsPanels) en sections avec
+  interrupteurs et choix segmentés : Stade 3D, rythme des matchs, caméra par défaut, bandeau de
+  commentaires, qualité 3D (Économie/Normale/Ultra : résolution, ombres, densité de foule), son,
+  difficulté. Préférences d'affichage en localStorage (sel-view3d, sel-matchpace, sel-cam,
+  sel-ticker, sel-q3d) : rien à migrer dans `state`. Refonte CSS globale (bloc "v45 — REFONTE DES
+  MENUS") : barre du haut avec logo et pastilles étiquetées, sous-navigation segmentée, fiches
+  avec poignée, cartes en verre, barre d'onglets avec indicateur.
+ATTENTION si vous reprenez ce chantier : toute nouvelle action de jeu qui déplace le ballon dans
+m.pos doit AUSSI appeler s3dAction (sinon le ballon 3D ne la jouera pas) et mettre à jour
+m.lastHolder. Stade3D._debug() expose l'état du ballon et de la file (utile pour les tests ;
+window.__S3D_MAXDT permet de compenser un rendu logiciel lent en test).
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1525,6 +1554,89 @@ body{background:
 .player-card.special::after{background:linear-gradient(115deg, transparent 35%, rgba(255,228,140,0.22) 45%, transparent 55%); background-size:250% 100%;}
 @keyframes cardSheen{0%,70%{background-position:120% 0;} 100%{background-position:-120% 0;}}
 .pos-badge{border-radius:10px 10px 10px 3px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 8px rgba(0,0,0,0.35);}
+
+/* =====================================================================================
+   v45 — REFONTE DES MENUS ET DES OPTIONS (dernier bloc : prioritaire sur les précédents)
+   ===================================================================================== */
+:root{ --glass:rgba(255,255,255,0.055); --glass-2:rgba(255,255,255,0.09); --stroke:rgba(255,255,255,0.10); --accent:#4c86c4; }
+/* Barre du haut */
+.topbar{position:relative; padding:12px 14px 10px; background:
+  radial-gradient(ellipse 80% 120% at 0% 0%, rgba(76,134,196,0.22), transparent 60%),
+  radial-gradient(ellipse 60% 120% at 100% 0%, rgba(212,175,55,0.16), transparent 60%),
+  linear-gradient(180deg, rgba(14,22,48,0.96), rgba(8,12,28,0.85));}
+.topbar .brand{gap:10px;}
+.brand-logo{width:40px; height:40px; border-radius:12px; box-shadow:0 0 0 1px rgba(212,175,55,0.45), 0 6px 16px rgba(0,0,0,0.5);}
+.brand-txt h1{font-size:23px; line-height:1;}
+.brand-sub{display:flex; align-items:center; gap:6px; margin-top:3px; font-family:'Barlow Condensed'; font-weight:600; font-size:11px;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--chalk); opacity:.85;}
+.brand-sub .flag{width:16px; height:11px;}
+.icon-cluster{background:var(--glass); border-color:var(--stroke); padding:4px; gap:2px;}
+.icon-cluster .close-x{width:34px; height:34px; border-radius:12px; font-size:16px;}
+.stat-strip-top{gap:7px; margin-top:12px;}
+.record{display:block; white-space:nowrap; padding:6px 12px 6px; border-radius:12px; background:var(--glass);
+  border-color:var(--stroke); font-size:13px; line-height:1.1; box-shadow:inset 0 1px 0 rgba(255,255,255,0.05);}
+.record .rk{display:block; font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--chalk); opacity:.6; margin-bottom:2px;}
+.record b{margin:0 1px;}
+/* Titres et sous-navigation segmentée */
+.section-title{font-size:30px; margin:2px 0 12px;}
+.eyebrow{display:inline-flex; align-items:center; gap:6px;}
+.eyebrow::before{content:''; width:14px; height:2px; background:var(--gold); border-radius:2px; box-shadow:0 0 8px var(--gold);}
+.subnav{background:rgba(0,0,0,0.28); border:1px solid var(--stroke); border-radius:14px; padding:4px; gap:4px;}
+.subnav-btn{border:none; border-radius:10px; background:transparent; padding:9px 6px;}
+.subnav-btn.active{background:linear-gradient(180deg, rgba(212,175,55,0.32), rgba(212,175,55,0.14)); box-shadow:inset 0 0 0 1px rgba(212,175,55,0.5), 0 4px 12px rgba(0,0,0,0.3);}
+/* Boutons d'action secondaires */
+.btn-soin{border-radius:12px; background:linear-gradient(180deg, rgba(76,134,196,0.22), rgba(76,134,196,0.1)); border-color:rgba(76,134,196,0.45);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 12px rgba(0,0,0,0.25); transition:transform .12s, filter .15s;}
+.btn-soin:active:not(:disabled){transform:scale(0.97); filter:brightness(1.15);}
+.btn-ghost{border-radius:12px; background:var(--glass); border-color:var(--stroke);}
+.btn{border-radius:13px;}
+/* Listes, classements, actus, sélecteurs */
+.standing-row{border-bottom-color:rgba(255,255,255,0.06); border-radius:10px; padding:10px 8px;}
+.standing-row:nth-child(odd){background:rgba(255,255,255,0.025);}
+.news-item{border-radius:14px; border-color:var(--stroke); background:linear-gradient(135deg, var(--glass-2), rgba(255,255,255,0.02));}
+.slot-pick{border-radius:12px; background:var(--glass); border-color:var(--stroke); padding:11px 13px;}
+.slot-pick.filled{border-color:rgba(95,184,122,0.55); background:linear-gradient(90deg, rgba(95,184,122,0.12), var(--glass) 60%);}
+.tactic-bar{border-radius:14px; padding:12px 14px;}
+.commentary{border-radius:14px; border-color:var(--stroke); background:rgba(0,0,0,0.25);}
+.commentary .ev{border-bottom-color:rgba(255,255,255,0.05);}
+/* Fiches (sheets) */
+.overlay{background:rgba(3,6,14,0.72); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);}
+.sheet{border-radius:26px 26px 0 0; padding:14px 18px 30px; border-top:1px solid rgba(212,175,55,0.35);}
+.sheet::before{content:''; display:block; width:44px; height:5px; border-radius:3px; background:rgba(255,255,255,0.22); margin:0 auto 12px;}
+.sheet-head{padding-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:14px;}
+.close-x{border-radius:50%;}
+.sheet-head .close-x{width:34px; height:34px; background:var(--glass); border:1px solid var(--stroke); font-size:15px;}
+/* Réglages : sections, cartes, interrupteurs, choix segmentés */
+.set-title{font-family:'Barlow Condensed'; font-weight:700; text-transform:uppercase; letter-spacing:.12em; font-size:12.5px;
+  color:var(--gold); margin:18px 2px 8px;}
+.set-title.danger{color:#f19aa0;}
+.set-card{background:linear-gradient(135deg, var(--glass-2), rgba(255,255,255,0.025)); border:1px solid var(--stroke); border-radius:16px;
+  padding:4px 12px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 20px rgba(0,0,0,0.25);}
+.set-row{display:flex; align-items:center; gap:12px; padding:12px 0; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.06);}
+.set-card > :last-child{border-bottom:none;}
+.set-ic{width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:17px;
+  background:rgba(255,255,255,0.07); flex-shrink:0;}
+.set-lab{flex:1; font-weight:600; font-size:14.5px; display:flex; flex-direction:column; gap:2px;}
+.set-lab small{font-weight:400; font-size:11.5px; color:var(--chalk); opacity:.75;}
+.set-block{padding:12px 0; border-bottom:1px solid rgba(255,255,255,0.06);}
+.set-block .set-lab{margin-bottom:9px;}
+.switch{width:48px; height:28px; border-radius:16px; background:rgba(255,255,255,0.14); position:relative; flex-shrink:0; transition:background .2s;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,0.4);}
+.switch i{position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,0.4);
+  transition:transform .22s cubic-bezier(.3,1.4,.5,1);}
+.switch.on{background:linear-gradient(90deg,#2f9e5a,#5fd08a);}
+.switch.on i{transform:translateX(20px);}
+.seg{display:flex; gap:4px; background:rgba(0,0,0,0.3); border:1px solid var(--stroke); border-radius:12px; padding:3px; flex-wrap:wrap;}
+.set-card > .seg{margin:10px 0;}
+.seg-btn{flex:1; min-width:60px; border:none; background:transparent; color:var(--chalk); font-family:'Barlow Condensed'; font-weight:700;
+  font-size:13px; letter-spacing:.03em; padding:8px 6px; border-radius:9px; cursor:pointer; transition:background .15s, color .15s;}
+.seg-btn.on{background:linear-gradient(180deg,#f0d77a,#d4af37); color:#1d1500; box-shadow:0 3px 10px rgba(212,175,55,0.35);}
+/* Barre d'onglets */
+.tabbar{padding:7px 6px; gap:3px;}
+.tab-btn{font-size:9.5px; gap:3px; padding:7px 0 6px; position:relative;}
+.tab-btn .ic{font-size:20px; filter:saturate(0.7); transition:transform .2s, filter .2s;}
+.tab-btn.active .ic{filter:saturate(1.2) drop-shadow(0 0 6px rgba(212,175,55,0.6)); transform:translateY(-1px);}
+.tab-btn.active::after{content:''; position:absolute; bottom:2px; left:30%; right:30%; height:3px; border-radius:2px; background:var(--gold); box-shadow:0 0 8px var(--gold);}
 </style>
 </head>
 <body>
@@ -4022,8 +4134,8 @@ function render(){
     <div class="topbar">
       <div class="topbar-row1">
         <div class="brand">
-          <div class="flag"></div>
-          <h1>Sélectionneur</h1>
+          <img class="brand-logo" src="./icons/icon-192.png" alt="">
+          <div class="brand-txt"><h1>Sélectionneur</h1><div class="brand-sub"><span class="flag"></span>Équipe de France · Manager</div></div>
         </div>
         <div class="icon-cluster">
           <button class="close-x" id="soundToggle">${state.settings.sound?"🔊":"🔇"}</button>
@@ -4031,10 +4143,10 @@ function render(){
         </div>
       </div>
       <div class="stat-strip-top">
-        <div class="record">📅<b>${currentGameDateLabel()}</b></div>
-        <div class="record">🏆<b>${state.career.w}</b>V <b>${state.career.d}</b>N <b>${state.career.l}</b>D</div>
-        <div class="record">🌍<b>#${state.worldRanking||18}</b></div>
-        <div class="record">💰<b>${state.budget}</b> M€</div>
+        <div class="record"><span class="rk">Date</span>📅<b>${currentGameDateLabel()}</b></div>
+        <div class="record"><span class="rk">Bilan</span><b>${state.career.w}</b>V <b>${state.career.d}</b>N <b>${state.career.l}</b>D</div>
+        <div class="record"><span class="rk">FIFA</span>🌍<b>#${state.worldRanking||18}</b></div>
+        <div class="record"><span class="rk">Budget</span>💰<b>${state.budget}</b> M€</div>
       </div>
     </div>
     <div id="screen" class="screen"></div>
@@ -5655,6 +5767,59 @@ function openTacticsSheet(){
   });
 }
 
+// v45 : panneaux de réglages refondus (interrupteurs + choix segmentés). Les options d'affichage
+// (vue 3D, qualité, caméra, bandeau, rythme) sont des préférences localStorage, PAS dans `state`.
+function segCtl(name, options, current){
+  return `<div class="seg" data-seg="${name}">${options.map(([v,l])=>`<button class="seg-btn ${String(v)===String(current)?'on':''}" data-v="${v}">${l}</button>`).join("")}</div>`;
+}
+function toggleRow(name, icon, label, sub, on){
+  return `<div class="set-row" data-toggle="${name}"><span class="set-ic">${icon}</span><span class="set-lab">${label}<small>${sub}</small></span><span class="switch ${on?'on':''}"><i></i></span></div>`;
+}
+function renderSettingsPanels(){
+  const has3d = !!(window.Stade3D && Stade3D.supported());
+  const q = has3d ? Stade3D.getQuality() : "normal";
+  return `
+    <h3 class="set-title">🏟️ Match en direct</h3>
+    <div class="set-card">
+      ${has3d ? toggleRow("view3d", "🎥", "Stade 3D", "Sinon : terrain 2.5D classique", Stade3D.isEnabled()) : ""}
+      <div class="set-block"><div class="set-lab">⏱️ Rythme des matchs<small>Durée d'un match en direct</small></div>
+        ${segCtl("pace", Object.entries(MATCH_PACES).map(([k,v])=>[k, v.label]), matchPaceKey())}</div>
+      ${has3d ? `<div class="set-block"><div class="set-lab">📺 Caméra par défaut</div>
+        ${segCtl("cam", [["TV","TV"],["Proche","Proche"],["Tactique","2.5D"],["Tribune","Tribune"],["Drone","Drone"]], Stade3D.getDefaultCam())}</div>
+      ${toggleRow("ticker", "💬", "Bandeau de commentaires", "Dernière action affichée sur la 3D", Stade3D.tickerOn())}` : ""}
+    </div>
+    ${has3d ? `<h3 class="set-title">✨ Graphismes</h3>
+    <div class="set-card">
+      <div class="set-block"><div class="set-lab">Qualité 3D<small>Économie = plus fluide et moins de batterie</small></div>
+        ${segCtl("quality", Object.entries(Stade3D.QUALITIES), q)}</div>
+    </div>` : ""}
+    <h3 class="set-title">🔊 Son</h3>
+    <div class="set-card">
+      ${toggleRow("sound", "🔊", "Ambiance du stade", "Sifflets, chants, acclamations", !!state.settings.sound)}
+    </div>
+    <h3 class="set-title">🎮 Difficulté</h3>
+    <div class="set-card">
+      ${segCtl("diff", Object.entries(DIFFICULTIES).map(([k,d])=>[k, d.label]), state.settings.difficulty||"normal")}
+    </div>`;
+}
+function bindSettingsPanels(root){
+  root.querySelectorAll("[data-seg]").forEach(seg=> seg.querySelectorAll(".seg-btn").forEach(b=> b.onclick = ()=>{
+    const v = b.dataset.v, name = seg.dataset.seg;
+    seg.querySelectorAll(".seg-btn").forEach(x=> x.classList.toggle("on", x===b));
+    if(name==="pace"){ try{ localStorage.setItem("sel-matchpace", v); }catch(e){} document.querySelectorAll("[data-pace-label]").forEach(el=> el.textContent = MATCH_PACES[v].label); }
+    if(name==="cam" && window.Stade3D) Stade3D.setDefaultCam(v);
+    if(name==="quality" && window.Stade3D) Stade3D.setQuality(v);
+    if(name==="diff"){ state.settings.difficulty = v; pendingBgRender = true; saveGame(); }
+  }));
+  root.querySelectorAll("[data-toggle]").forEach(r=> r.onclick = ()=>{
+    const sw = r.querySelector(".switch"); const on = !sw.classList.contains("on");
+    sw.classList.toggle("on", on);
+    const name = r.dataset.toggle;
+    if(name==="sound"){ state.settings.sound = on; SFX.setEnabled(on); pendingBgRender = true; saveGame(); }
+    if(name==="view3d" && window.Stade3D){ Stade3D.setEnabled(on); pendingBgRender = true; }
+    if(name==="ticker" && window.Stade3D) Stade3D.setTicker(on);
+  });
+}
 function openSettingsSheet(){
   closeSheet();
   const overlay = document.createElement("div");
@@ -5662,30 +5827,18 @@ function openSettingsSheet(){
   overlay.innerHTML = `
     <div class="sheet">
       <div class="sheet-head">
-        <h2 style="font-size:22px;margin:0;">Réglages</h2>
+        <div><div class="eyebrow">Options du jeu</div><h2 style="font-size:26px;margin:0;">Réglages</h2></div>
         <button class="close-x" id="closeSheet">✕</button>
       </div>
-      <h3 style="font-size:14px;font-family:'Barlow Condensed';text-transform:uppercase;color:var(--gold);margin:10px 0 6px;">Son</h3>
-      <div class="slot-pick ${state.settings.sound?'filled':''}" data-sound="1" style="margin-bottom:6px;">
-        <span>🔊 Ambiance de stade, sifflets &amp; acclamations</span>
-        <span class="chevron">${state.settings.sound?'✓ Activé':'Coupé'}</span>
-      </div>
-      <h3 style="font-size:14px;font-family:'Barlow Condensed';text-transform:uppercase;color:var(--gold);margin:16px 0 6px;">Difficulté</h3>
-      <div class="picker-list" style="max-height:none;">
-        ${Object.entries(DIFFICULTIES).map(([key,d])=>`
-          <div class="slot-pick ${state.settings.difficulty===key?'filled':''}" data-diff="${key}" style="margin-bottom:6px;">
-            <span>${d.label}</span>
-            <span class="chevron">${state.settings.difficulty===key?'✓':'▾'}</span>
-          </div>`).join("")}
-      </div>
-      <h3 style="font-size:14px;font-family:'Barlow Condensed';text-transform:uppercase;color:var(--gold);margin:16px 0 6px;">Sauvegarde</h3>
+      ${renderSettingsPanels()}
+      <h3 class="set-title">💾 Sauvegarde</h3>
       <div class="formation-note">Votre partie est sauvegardée automatiquement. Téléchargez un fichier de secours pour la conserver même après une mise à jour de l'application, et réimportez-le à tout moment pour restaurer votre progression.</div>
       <button class="btn btn-primary" id="exportBtn">⬇️ Télécharger la sauvegarde (.json)</button>
       <button class="btn btn-ghost" id="exportRosterBtn">📄 Télécharger la feuille d'effectif (.txt)</button>
       <button class="btn btn-ghost" id="importBtn">⬆️ Réimporter une sauvegarde</button>
       <input type="file" id="importFile" accept="application/json" style="display:none;">
       <div id="importMsg"></div>
-      <h3 style="font-size:14px;font-family:'Barlow Condensed';text-transform:uppercase;color:var(--gold);margin:16px 0 6px;">🧩 DLC &amp; Extensions</h3>
+      <h3 class="set-title">🧩 DLC &amp; Extensions</h3>
       <div class="formation-note">Insérez un fichier DLC (.html) pour ajouter du contenu au jeu : nouveaux joueurs, succès, événements... L'installation passe par un téléchargement, puis le DLC reste actif tant qu'il n'est pas retiré, et il est automatiquement inclus dans vos sauvegardes (locale et fichier exporté).</div>
       ${(state.dlcs&&state.dlcs.length) ? state.dlcs.map(d=>`
         <div class="slot-pick filled" style="margin-bottom:6px;align-items:flex-start;">
@@ -5698,23 +5851,14 @@ function openSettingsSheet(){
       <button class="btn btn-primary" id="insertDlcBtn">🧩 Insérer un DLC (.html)</button>
       <input type="file" id="dlcFile" accept=".html,text/html" style="display:none;">
       <div id="dlcMsg"></div>
-      <h3 style="font-size:14px;font-family:'Barlow Condensed';text-transform:uppercase;color:var(--gold);margin:16px 0 6px;">Zone de danger</h3>
+      <h3 class="set-title danger">⚠️ Zone de danger</h3>
       <button class="btn btn-ghost" id="resetBtn" style="border-color:rgba(193,18,31,0.5);color:#f19aa0;">🗑️ Recommencer une nouvelle carrière</button>
     </div>
   `;
   document.body.appendChild(overlay);
   document.getElementById("closeSheet").onclick = closeSheet;
   overlay.onclick = (e)=>{ if(e.target===overlay) closeSheet(); };
-  overlay.querySelectorAll("[data-diff]").forEach(b=> b.onclick = ()=>{
-    state.settings.difficulty = b.dataset.diff;
-    closeSheet(); render();
-  });
-  const soundOpt = overlay.querySelector("[data-sound]");
-  if(soundOpt) soundOpt.onclick = ()=>{
-    state.settings.sound = !state.settings.sound;
-    SFX.setEnabled(state.settings.sound);
-    closeSheet(); render();
-  };
+  bindSettingsPanels(overlay);
   document.getElementById("exportBtn").onclick = exportSave;
   document.getElementById("exportRosterBtn").onclick = exportRosterTXT;
   const fileInput = document.getElementById("importFile");
@@ -6275,6 +6419,22 @@ function setTeamShift(m, side, pr){
   else { m.shiftThem = -push; m.shiftUs = -drop; }
 }
 function relaxTeamShift(m){ m.shiftUs = (m.shiftUs||0)*0.5; m.shiftThem = (m.shiftThem||0)*0.5; }
+// v45 : chaque geste du moteur est aussi envoyé au stade 3D, qui le joue physiquement (ballon au pied)
+function s3dAction(m, a){ try{ if(window.Stade3D && Stade3D.onAction && isLiveScreenActive(m)) Stade3D.onAction(m, a); }catch(e){} }
+const DRIBBLE_MOVES = [
+  {key:"crochet",   lines:["{a} efface {b} d'un crochet court !", "Crochet de {a}, {b} est passé !"]},
+  {key:"passement", lines:["Passement de jambes de {a}, {b} est dans le vent !", "{a} enchaîne les passements et déstabilise {b}."]},
+  {key:"petitpont", lines:["PETIT PONT de {a} sur {b} !", "{a} glisse le ballon entre les jambes de {b} !"]},
+  {key:"roulette",  lines:["Roulette de {a} qui élimine {b} !", "{a} pivote sur une roulette et laisse {b} sur place."]},
+];
+// v45 : continuité de possession — le jeu reprend du dernier porteur réel (m.lastHolder) au lieu
+// d'un joueur tiré au hasard, pour que le ballon ne "saute" jamais d'un bout à l'autre du terrain.
+function setHolder(m, side, idx){ m.lastHolder = {side, idx}; }
+function startHolder(m, side, fallback){
+  const lh = m.lastHolder;
+  if(lh && lh.side === side && (side!=="us" || m.usOrder[lh.idx])) return {idx:lh.idx, turnover:false};
+  return {idx:fallback, turnover: !!lh};
+}
 function countPass(m, side){ if(!m.stats) return; if(side==="us") m.stats.passUs = (m.stats.passUs||0)+1; else m.stats.passThem = (m.stats.passThem||0)+1; }
 
 const PASS_LINES = {
@@ -6308,12 +6468,17 @@ async function playPassChain(m, side, holder, n, prFrom, prTo, talk){
     const type = dist > 34 ? "longue" : fwd > 12 ? "avant" : fwd < -6 ? "retrait" : "courte";
     m.pos.ball.x = arr[best].x; m.pos.ball.y = arr[best].y;
     countPass(m, side);
+    s3dAction(m, {kind:"pass", side, from:holder, to:best, type});
+    setHolder(m, side, best);
     applyFrame(m);
     if(Math.random() < talk){
       pushEntry(m, {min:m.minute, goal:false, text: pick(PASS_LINES[type]).replace("{a}", playerNameAt(m,side,holder)).replace("{b}", playerNameAt(m,side,best))});
     }
     holder = best;
-    await mDelay(type==="longue" ? 1150 : type==="avant" ? 950 : 780);
+    // v45 : attente = durée réelle de la passe en 3D (élan + vol du ballon à la vitesse de PASS_SPEED + contrôle)
+    const distM = Math.hypot((arr[best].x-from.x)*1.05, (arr[best].y-from.y)*0.68);
+    const spd = {courte:16, retrait:15, avant:20, longue:24}[type];
+    await mDelay(550 + distM/spd*1000 + 350);
   }
   return holder;
 }
@@ -6325,7 +6490,11 @@ async function playPossessionMinute(m){
   const arr = usHas ? m.pos.us : m.pos.them;
   let holder = 1 + Math.floor(Math.random()*8);
   if(usHas && !m.usOrder[holder]){ const f = m.usOrder.findIndex((p,i)=> i>0 && p); holder = f>0 ? f : 1; }
+  const sh0 = startHolder(m, side, holder);
+  holder = sh0.idx;
   m.pos.ball.x = arr[holder].x; m.pos.ball.y = arr[holder].y;
+  s3dAction(m, {kind: sh0.turnover ? "intercept" : "gain", side, who:holder});
+  setHolder(m, side, holder);
   const pr0 = rand(0.15, 0.45);
   holder = await playPassChain(m, side, holder, 1 + Math.floor(Math.random()*3), pr0, pr0 + rand(-0.05, 0.25), 0.3);
   if(Math.random() < 0.22){
@@ -6334,6 +6503,8 @@ async function playPossessionMinute(m){
     let thief = 5 + Math.floor(Math.random()*4);
     if(other==="us" && !m.usOrder[thief]) thief = 1 + Math.floor(Math.random()*4);
     if(oArr[thief]){ oArr[thief].x = m.pos.ball.x + rand(-3,3); oArr[thief].y = m.pos.ball.y + rand(-3,3); }
+    s3dAction(m, {kind:"intercept", side:other, who:thief});
+    setHolder(m, other, thief);
     applyFrame(m);
     if(Math.random() < 0.5) pushEntry(m, {min:m.minute, goal:false, text: pick([
       `Interception de ${playerNameAt(m,other,thief)} !`,
@@ -6364,12 +6535,38 @@ async function playSequence(m, side, outcome){
   // v44 : vraie construction — 2 à 5 passes entre joueurs nommés, le bloc monte avec le ballon
   let holder = 1 + Math.floor(Math.random()*7);
   if(ours && !m.usOrder[holder]){ const f = m.usOrder.findIndex((p,k)=> k>0 && p); holder = f>0 ? f : 1; }
-  if(holder===shooterIdx) holder = Math.max(1, shooterIdx-4);
+  const sh0 = startHolder(m, side, holder);
+  holder = sh0.idx;
+  if(holder===shooterIdx && sh0.turnover) holder = Math.max(1, shooterIdx-4);
   m.pos.ball.x = arr[holder].x; m.pos.ball.y = arr[holder].y;
+  s3dAction(m, {kind: sh0.turnover ? "intercept" : "gain", side, who:holder});
+  setHolder(m, side, holder);
   applyFrame(m);
   holder = await playPassChain(m, side, holder, 2 + Math.floor(Math.random()*4), 0.12, 0.62, 0.55);
+  // v45 : dribble avant le dernier geste (le porteur élimine un défenseur, en 3D comme dans le texte)
+  if(Math.random() < 0.5){
+    const otherSide = ours ? "them" : "us";
+    const defIdx = 1 + Math.floor(Math.random()*4);
+    const mv = pick(DRIBBLE_MOVES);
+    const oArr = ours ? m.pos.them : m.pos.us;
+    if(oArr[defIdx]){ oArr[defIdx].x = clamp(arr[holder].x + dir*4, 4, 96); oArr[defIdx].y = arr[holder].y; }
+    arr[holder].x = clamp(arr[holder].x + dir*9, 5, 95);
+    m.pos.ball.x = arr[holder].x; m.pos.ball.y = arr[holder].y;
+    s3dAction(m, {kind:"dribble", side, who:holder, past:defIdx, move:mv.key});
+    setHolder(m, side, holder);
+    applyFrame(m);
+    pushEntry(m, {min:m.minute, goal:false, text: pick(mv.lines).replace("{a}", nameOf(holder)).replace("{b}", playerNameAt(m, otherSide, defIdx))});
+    await mDelay(1300);
+  }
   // dernier geste : centre ou passe en profondeur vers le tireur qui attaque la surface
-  const assistIdx = (holder !== shooterIdx) ? holder : advIdx;
+  if(holder === shooterIdx){
+    const alt = [advIdx, ...attIdxPool].find(i=> i!==shooterIdx && (!ours || m.usOrder[i])) ?? (shooterIdx>1 ? shooterIdx-1 : 2);
+    s3dAction(m, {kind:"pass", side, from:holder, to:alt, type:"courte"});
+    countPass(m, side);
+    holder = alt; setHolder(m, side, holder);
+    await mDelay(700);
+  }
+  const assistIdx = holder;
   const wide = arr[assistIdx] && (arr[assistIdx].y < 28 || arr[assistIdx].y > 72);
   setTeamShift(m, side, 0.85);
   arr[shooterIdx].x = clamp(goalX - dir*rand(9,16), 5, 95);
@@ -6377,6 +6574,7 @@ async function playSequence(m, side, outcome){
   if(wide && arr[assistIdx]) arr[assistIdx].x = clamp(goalX - dir*rand(6,14), 5, 95);
   m.pos.ball.x = arr[shooterIdx].x; m.pos.ball.y = arr[shooterIdx].y;
   countPass(m, side);
+  s3dAction(m, {kind:"pass", side, from:assistIdx, to:shooterIdx, type: wide ? "centre" : "avant"});
   applyFrame(m);
   pushEntry(m, {min:m.minute, goal:false, text: wide
     ? pick([`Centre de ${nameOf(assistIdx)} vers ${nameOf(shooterIdx)}…`, `${nameOf(assistIdx)} déborde et centre pour ${nameOf(shooterIdx)} !`])
@@ -6384,6 +6582,11 @@ async function playSequence(m, side, outcome){
   await mDelay(950);
 
   m.pos.ball.x = goalX; m.pos.ball.y = lane;
+  s3dAction(m, {kind:"shot", side, who:shooterIdx, outcome});
+  // après la frappe : le gardien adverse (arrêt, sortie de but) ou un coup d'envoi (but)
+  if(outcome === "goal") m.lastHolder = null;
+  else if(outcome === "corner" || outcome === "post") setHolder(m, side, shooterIdx);
+  else setHolder(m, ours ? "them" : "us", 0);
   applyFrame(m);
   await mDelay(420);
 
@@ -6402,6 +6605,8 @@ async function playSequence(m, side, outcome){
     await mDelay(1600);
     m.pos.ball.x = 50; m.pos.ball.y = 50;
     m.shiftUs = 0; m.shiftThem = 0;
+    s3dAction(m, {kind:"kickoff", side: ours ? "them" : "us"});
+    setHolder(m, ours ? "them" : "us", 9);
     applyFrame(m);
   } else if(outcome === "save-great"){
     if(ours){ st.tirsUs++; st.cadresUs++; } else { st.tirsThem++; st.cadresThem++; }
@@ -6473,6 +6678,7 @@ async function playFoul(m, side){
   const weather = m.weather || WEATHERS[0];
   const teamName = ours ? "la France" : m.opp;
   if(ours) m.stats.fautesUs++; else m.stats.fautesThem++;
+  { const fk = 5+Math.floor(Math.random()*4); s3dAction(m, {kind:"foul", side, who:fk}); setHolder(m, side, fk); }
   const cardRoll = Math.random();
   const cardChance = Math.max(0.04, 0.16 + (weather.passFail||0)*0.3 - (state.staff.mental||0)*0.025);
   if(cardRoll < cardChance){
@@ -6620,6 +6826,8 @@ async function tickMatch(matchObj){
     if(isLiveScreenActive(matchObj)) showFinalButton(matchObj);
     return;
   }
+  if(!matchObj._ko1){ matchObj._ko1 = true; s3dAction(matchObj, {kind:"kickoff", side:"us"}); setHolder(matchObj, "us", 9); }
+  if(matchObj.halftimeDone && !matchObj._ko2 && !matchObj.extraTime){ matchObj._ko2 = true; s3dAction(matchObj, {kind:"kickoff", side:"them"}); setHolder(matchObj, "them", 9); }
   matchObj.minute += 1;   // v44 : minute par minute (avant : +5 en temps réglementaire)
   // Probabilités historiques calibrées pour une tranche de 5 minutes -> ramenées à la minute.
   // (La prolongation en mort subite gardait déjà un pas d'1 minute avec ces probabilités : inchangée.)

@@ -54,6 +54,16 @@
     try{ const v = localStorage.getItem(PREF_KEY); return v===null ? true : v==="1"; }catch(e){ return true; }
   };
   S.setEnabled = function(on){ try{ localStorage.setItem(PREF_KEY, on?"1":"0"); }catch(e){} };
+  // v45 : préférences d'affichage (localStorage, hors sauvegarde de partie)
+  function pref(k, d){ try{ const v = localStorage.getItem(k); return v===null ? d : v; }catch(e){ return d; } }
+  function setPref(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
+  S.QUALITIES = {eco:"Économie", normal:"Normale", ultra:"Ultra"};
+  S.getQuality = ()=> { const q = pref("sel-q3d", "normal"); return S.QUALITIES[q] ? q : "normal"; };
+  S.setQuality = (q)=>{ setPref("sel-q3d", q); applyQuality(); };
+  S.getDefaultCam = ()=> pref("sel-cam", "TV");
+  S.setDefaultCam = (c)=>{ setPref("sel-cam", c); const i = CAM_MODES.indexOf(c); if(i>=0) camMode = i; };
+  S.tickerOn = ()=> pref("sel-ticker", "1") === "1";
+  S.setTicker = (on)=> setPref("sel-ticker", on ? "1" : "0");
 
   // ---------------------------------------------------------------- maillots
   // Couleurs [maillot, short, chaussettes, numéro] ; "alt" = tenue extérieure si conflit.
@@ -359,6 +369,20 @@
   const CAM_MODES = ["TV", "Proche", "Tactique", "Tribune", "Drone"];
   let fsOn = false;
 
+  function applyQuality(){
+    if(!renderer) return;
+    const q = S.getQuality(), lowEnd = (navigator.hardwareConcurrency||4) <= 4;
+    const pr = q==="eco" ? 1 : q==="ultra" ? 2 : (lowEnd ? 1.25 : 1.75);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, pr));
+    const shadows = q !== "eco";
+    if(renderer.shadowMap.enabled !== shadows){
+      renderer.shadowMap.enabled = shadows;
+      scene.traverse(o=>{ if(o.material){ (Array.isArray(o.material)?o.material:[o.material]).forEach(mm=> mm.needsUpdate = true); } });
+    }
+    if(world && world.key){ const sz = q==="ultra" ? 4096 : 2048; if(world.key.shadow.mapSize.x !== sz){ world.key.shadow.mapSize.set(sz,sz); if(world.key.shadow.map){ world.key.shadow.map.dispose(); world.key.shadow.map = null; } } }
+    if(world && world.crowd) world.crowd.count = q==="eco" ? Math.floor(world.crowdN*0.55) : world.crowdN;
+    lastW = 0;
+  }
   function initRenderer(){
     renderer = new T.WebGLRenderer({antialias:true, powerPreference:"high-performance", alpha:false});
     const lowEnd = (navigator.hardwareConcurrency||4) <= 4;
@@ -374,6 +398,8 @@
     camera = new T.PerspectiveCamera(30, 1.6, 0.5, 900);
     clock = new T.Clock();
     buildWorld();
+    { const i = CAM_MODES.indexOf(S.getDefaultCam()); if(i>=0) camMode = i; }
+    applyQuality();
   }
 
   function buildWorld(){
@@ -540,7 +566,6 @@
     const ball = new T.Mesh(new T.SphereGeometry(0.11, 20, 14), new T.MeshStandardMaterial({map:ballTex, roughness:0.45}));
     ball.castShadow = true; scene.add(ball);
     world.ball = ball;
-    world.ballState = {x:0,y:0.11,z:0, fromX:0,fromZ:0,toX:0,toZ:0,t:1,dur:0.5,arc:0, tgtX:0, tgtZ:0, inNet:0};
 
     // Ombres "multi-projecteurs" (4 ombres douces par joueur, signature des matchs de nuit)
     world.blobTex = makeBlobTexture();
@@ -802,13 +827,28 @@
     h.body.position.x = 0;
     // frappe de balle
     if(h.kick>0){
+      const A = h.kickAmp || 1;          // 0.28 = touche de conduite, 0.75 passe, 1.45 frappe
       const k = 1-h.kick; // 0 -> 1
       const sw = Math.sin(k*Math.PI);
-      h.legR.hp.rotation.x = -0.4 + sw*-1.1 + (k<0.35 ? 0.9*(k/0.35) : 0);
-      h.legR.kn.rotation.x = k<0.4 ? 1.1 : 0.15;
-      h.armL.sh.rotation.z = 0.12 + sw*0.9; h.armR.sh.rotation.z = -0.12 - sw*0.6;
-      h.kick = Math.max(0, h.kick - dt*2.6);
+      const leg = (A < 0.5 && (h.kickLeg = h.kickLeg || 1) < 0) ? h.legL : h.legR;
+      leg.hp.rotation.x = lerp(leg.hp.rotation.x, (-0.4 + sw*-1.1 + (k<0.35 ? 0.9*(k/0.35) : 0))*A, Math.min(1, A*1.4));
+      leg.kn.rotation.x = k<0.4 ? 1.1*A : 0.15;
+      if(A > 0.6){ h.armL.sh.rotation.z = 0.12 + sw*0.9*A; h.armR.sh.rotation.z = -0.12 - sw*0.6*A; h.spine.rotation.x -= sw*0.25*(A-0.6); }
+      h.kick = Math.max(0, h.kick - dt*(A < 0.5 ? 5.5 : 2.6));
+      if(h.kick === 0 && A < 0.5) h.kickLeg = -(h.kickLeg||1);
     }
+    // feinte / dribble : déhanché, passement, roulette
+    if(h.feint){
+      const f = h.feint; f.t += dt;
+      const dur = f.kind==="roulette" ? 0.55 : 0.42;
+      const u = Math.min(1, f.t/dur);
+      if(f.kind === "roulette") h.body.rotation.y = u*Math.PI*2;
+      else if(f.kind === "passement"){ h.body.rotation.z = Math.sin(u*Math.PI*2)*0.38*f.dir; h.legL.hp.rotation.z = Math.sin(u*Math.PI*2)*0.5; }
+      else { h.body.rotation.z = Math.sin(u*Math.PI)*0.42*f.dir; h.body.position.x = Math.sin(u*Math.PI)*0.25*f.dir; }
+      if(u >= 1){ h.feint = null; h.body.rotation.y = 0; h.legL.hp.rotation.z = 0; }
+    }
+    // défenseur éliminé : déséquilibre
+    if(h.stun > 0){ h.body.rotation.x = -0.32*Math.min(1, h.stun); h.body.rotation.z += Math.sin(t*9)*0.08*h.stun; }
     // célébration : bras en l'air + sauts
     if(h.celebrate>0){
       const c = Math.min(1, h.celebrate);
@@ -888,70 +928,310 @@
     };
     teams.us.forEach((h,i)=> set(h, m.pos.us[i]));
     teams.them.forEach((h,i)=> set(h, m.pos.them[i]));
-    // le joueur le plus proche du ballon va réellement au contact
-    let best=null, bd=1e9;
-    teams.us.concat(teams.them).forEach(h=>{ if(h.isGK) return; const d=Math.hypot(h.tgt.x-bx, h.tgt.z-bz); if(d<bd){ bd=d; best=h; } });
-    if(best && bd < 14){ best.tgt.set(bx - (best.side==="us"?0.6:-0.6), 0, bz); }
-    teams.carrier = (best && bd<14) ? best : null;
+    // v45 : le porteur conduit le ballon vers l'avant ; le défenseur le plus proche vient presser
+    const c = BS.carrier;
+    if(c && !BS.inHands && !c.isGK){
+      c.tgt.x = clamp(c.tgt.x + attackDir(c.side)*5, -HL+3, HL-3);
+      const opp = c.side==="us" ? teams.them : teams.us;
+      let best=null, bd=1e9;
+      opp.forEach(h=>{ if(h.isGK) return; const d=Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z); if(d<bd){ bd=d; best=h; } });
+      if(best && bd < 14) best.tgt.set(c.pos.x - attackDir(c.side)*1.9, 0, c.pos.z + (best.pos.z>c.pos.z?0.5:-0.5));
+    }
+    teams.carrier = BS.carrier;
+    const bxw = world.ball.position.x, bzw = world.ball.position.z;
     // arbitre : diagonale, ~12 m du ballon
-    teams.ref.tgt.set(clamp(bx-9, -HL+8, HL-8), 0, clamp(bz+11, -HW+3, HW-3));
+    teams.ref.tgt.set(clamp(bxw-9, -HL+8, HL-8), 0, clamp(bzw+11, -HW+3, HW-3));
     // juges de touche : alignés sur l'avant-dernier défenseur de chaque moitié
-    teams.linesmen[0].tgt.set(clamp(Math.min(bx, -10), -HL, 0), 0, -HW-1.2);
-    teams.linesmen[1].tgt.set(clamp(Math.max(bx, 10), 0, HL), 0, HW+1.2);
-    teams.coach.tgt.set(clamp(bx*0.08-9, -14, -4), 0, HW+2.2);
+    teams.linesmen[0].tgt.set(clamp(Math.min(bxw, -10), -HL, 0), 0, -HW-1.2);
+    teams.linesmen[1].tgt.set(clamp(Math.max(bxw, 10), 0, HL), 0, HW+1.2);
+    teams.coach.tgt.set(clamp(bxw*0.08-9, -14, -4), 0, HW+2.2);
     if(snap){ teams.ref.pos.copy(teams.ref.tgt); teams.linesmen.forEach(l=>l.pos.copy(l.tgt)); teams.coach.pos.copy(teams.coach.tgt); }
   }
 
-  // ---------------------------------------------------------------- ballon
-  function updateBall(m, dt){
-    const B = world.ballState;
-    const p = m.pos && m.pos.ball ? m.pos.ball : {x:50,y:50};
-    let tx = toX(p.x), tz = toZ(p.y);
-    const shot = (p.x >= 94 || p.x <= 6) && Math.abs(p.y-50) < 35;   // un corner (y 5/95) n'est pas une frappe
-    if(shot && !B.inNet){
-      // tir : vise le cadre (le moteur 2D vise des "couloirs" à 25/50/75 % de la largeur)
-      const side = p.x>=50 ? 1 : -1;
-      tx = side*(HL+0.2);
-      tz = clamp(tz*0.18, -GOAL_W/2-1.2, GOAL_W/2+1.2);
+  // ---------------------------------------------------------------- ballon (v45 : vrai contrôle au pied)
+  // Le moteur de match envoie des ACTIONS (Stade3D.onAction) : gain, pass, dribble, shot, intercept,
+  // foul, kickoff. Elles sont jouées dans l'ordre, physiquement : le passeur va au ballon, arme sa
+  // frappe, le ballon part de SON pied vers le point de réception, le receveur court à sa rencontre
+  // et le contrôle ; le porteur conduit le ballon par petites touches synchronisées avec ses pas.
+  // Si la file s'allonge (rythme "Rapide"), le temps des actions est accéléré (timeScale).
+  const BS = {mode:"dead", carrier:null, pos:new T.Vector3(0,0.11,0), prev:new T.Vector3(), vel:new T.Vector3(),
+    ahead:0.45, bs:0, lat:0, latT:0, flight:null, needsRestart:false, inHands:false, footSide:1};
+  let queue = [], act = null, timeScale = 1, pendingGoal = null, lastGoalAt = -99;
+  const dbg = {done:0, pushed:0, simT:0, kinds:{}, time:{}};
+  const _f = new T.Vector3(), _g = new T.Vector3();
+  function teamArr(side){ return side==="us" ? teams.us : teams.them; }
+  function pl(side, i){ return teamArr(side)[clamp((i|0), 0, 10)]; }
+  function fwdOf(h, out){ return out.set(Math.sin(h.heading), 0, Math.cos(h.heading)); }
+  function footOf(h, out){ fwdOf(h, out); return out.multiplyScalar(0.42).add(h.pos).setY(0.11); }
+  function attackDir(side){ return side==="us" ? 1 : -1; }
+  function resetBall(m){
+    BS.mode = "dead"; BS.carrier = null; BS.flight = null; BS.inHands = false; BS.needsRestart = false;
+    BS.pos.set(m && m.pos ? toX(m.pos.ball.x) : 0, 0.11, m && m.pos ? toZ(m.pos.ball.y) : 0); BS.prev.copy(BS.pos);
+    queue = []; act = null; pendingGoal = null;
+    if(teams) teams.carrier = null;
+  }
+  function clearOv(h){ if(h){ h.override = null; } }
+  function giveTo(h, opts){
+    BS.carrier = h; BS.mode = "held"; BS.flight = null; BS.ahead = 0.45; BS.bs = h.speed; BS.lat = 0;
+    BS.inHands = !!(opts && opts.hands); BS.needsRestart = false;
+    teams.carrier = h; h.override = null;
+    if(!(opts && opts.silent) && !BS.inHands){ h.kick = 1; h.kickAmp = 0.3; }   // contrôle orienté
+  }
+  function launch(target, speed, h, onEnd){
+    BS.mode = "flight"; BS.carrier = null; BS.inHands = false;
+    const from = BS.pos.clone(); if(from.y < 0.11) from.y = 0.11;
+    const dist = Math.hypot(target.x-from.x, target.z-from.z);
+    BS.flight = {from, to:target.clone(), t:0, dur:clamp(dist/speed, 0.12, 2.4), h:h||0, onEnd};
+    teams.carrier = null;
+  }
+  // Fait venir le joueur h au ballon (ou le lui fait récupérer). true quand h a le ballon au pied.
+  function acquire(h, a){
+    if(BS.carrier === h) return true;
+    if(BS.mode === "dead" && (BS.needsRestart || a.restart)){
+      // remise en jeu (sortie de but, touche) : le ballon est replacé aux pieds du joueur
+      if((a.wait = (a.wait||0)) < 0.45) return false;
+      footOf(h, BS.pos); BS.prev.copy(BS.pos); giveTo(h, {silent:true}); return true;
     }
-    if(B.inNet>0){ B.inNet -= dt; tx = B.netX; tz = B.netZ; }
-    if(Math.hypot(tx-B.tgtX, tz-B.tgtZ) > 0.8){
-      // nouvelle destination : on lance une passe / une frappe depuis la position actuelle
-      B.fromX = B.x; B.fromZ = B.z; B.toX = tx; B.toZ = tz; B.tgtX = tx; B.tgtZ = tz; B.t = 0;
-      const dist = Math.hypot(tx-B.x, tz-B.z);
-      const isShot = shot || B.inNet>0;
-      B.dur = clamp(dist / (isShot ? 30 : 17), 0.18, 1.3);
-      B.arc = isShot ? (B.inNet>0 ? B.netY : rnd(0.3,1.8)) : (dist>22 ? dist*0.11 : dist*0.02);
-      B.shotArc = isShot;
-      // le porteur le plus proche frappe
-      if(teams){ let best=null, bd=1e9; teams.us.concat(teams.them).forEach(h=>{ const d=Math.hypot(h.pos.x-B.x, h.pos.z-B.z); if(d<bd){bd=d; best=h;} }); if(best && bd<4) best.kick = 1; }
-      // le gardien adverse plonge sur les frappes cadrées
-      if(isShot && teams){
-        const gk = (tx>0 ? teams.them[0] : teams.us[0]);
-        if(gk && Math.abs(tz) < GOAL_W/2+1.5){ gk.diveDir = Math.sign(tz - gk.pos.z || 1) * (tx>0 ? -1 : 1); gk.dive = Math.abs(tz-gk.pos.z) > 0.9 ? 1 : 0; }
+    if(BS.mode === "flight"){ h.override = _g.copy(BS.flight.to).setY(0).clone(); return false; }
+    if(BS.carrier && BS.carrier !== h && BS.carrier.side === h.side){
+      // coéquipier au ballon : il lui donne (passe courte immédiate, pas un tacle !)
+      if(!a.relay){
+        a.relay = true; const c = BS.carrier;
+        faceTo(c, h.pos.x, h.pos.z, 0.4); c.kick = 1; c.kickAmp = 0.7;
+        launch(footOf(h, _f.clone()), a.rush ? 30 : 16, 0.05, ()=>{ giveTo(h); });
       }
+      return false;
     }
-    if(B.t < 1){
-      B.t = Math.min(1, B.t + dt/B.dur);
-      const e = B.t;
-      const nx = lerp(B.fromX, B.toX, e), nz = lerp(B.fromZ, B.toZ, e);
-      const ny = 0.11 + (B.shotArc ? B.arc*e*(1.3-e)*1.6 : Math.sin(e*Math.PI)*B.arc);
-      const dx = nx-B.x, dz = nz-B.z;
-      B.x = nx; B.z = nz; B.y = Math.max(0.11, ny);
-      const d = Math.hypot(dx,dz);
-      if(d>1e-4){ const ax = _ax.set(dz,0,-dx).normalize(); world.ball.rotateOnWorldAxis(ax, d/0.11); }
-    } else {
-      // ballon "au pied" : suit le porteur avec de petites touches
-      const c = teams && teams.carrier;
-      if(c && Math.hypot(c.pos.x-B.x, c.pos.z-B.z) < 3 && !B.inNet){
-        const fx = c.pos.x + Math.sin(c.heading)*0.45, fz = c.pos.z + Math.cos(c.heading)*0.45;
-        const dx = (fx-B.x)*damp(6,dt), dz = (fz-B.z)*damp(6,dt);
-        B.x += dx; B.z += dz;
-        const d = Math.hypot(dx,dz); if(d>1e-4){ const ax = _ax.set(dz,0,-dx).normalize(); world.ball.rotateOnWorldAxis(ax, d/0.11); }
+    if(BS.carrier && BS.carrier !== h){
+      // duel : le joueur presse le porteur et tacle quand il est au contact
+      const c = BS.carrier;
+      h.override = _g.set(c.pos.x + Math.sin(c.heading)*0.9, 0, c.pos.z + Math.cos(c.heading)*0.9).clone();
+      if(Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z) < 1.7 || a.t > (a.rush ? 0.4 : 1.5)){
+        h.kick = 1; h.kickAmp = 0.85;                 // jambe tendue : tacle
+        c.stun = 0.9; c.override = null;
+        if(c.isGK) BS.inHands = false;
+        giveTo(h, {silent:true}); return true;
       }
-      B.y = lerp(B.y, 0.11, damp(10,dt));
+      return false;
     }
-    world.ball.position.set(B.x, B.y, B.z);
+    // ballon libre ou arrêté : on court dessus
+    h.override = _g.copy(BS.pos).setY(0).clone();
+    footOf(h, _f);
+    if(_f.distanceTo(BS.pos) < 0.75 || Math.hypot(h.pos.x-BS.pos.x, h.pos.z-BS.pos.z) < 0.7){ giveTo(h); return true; }
+    if(a.t > (a.rush ? 0.5 : 2.4) && !a.magnet){
+      // trop loin (file en retard) : le ballon lui est "servi" pour ne pas bloquer la suite
+      a.magnet = true; launch(footOf(h, _f.clone()), 24, 0.2, ()=>{ giveTo(h); });
+    }
+    return false;
+  }
+  function faceTo(h, x, z, dur){ h.faceTo = {x, z}; h.faceT = dur||0.5; }
+
+  const PASS_SPEED = {courte:16, retrait:15, avant:20, longue:24, centre:21};
+  function stepAction(a, dt){
+    a.t += dt; a.wait = (a.wait||0) + dt;
+    const k = a.kind;
+    if(k === "gain" || k === "intercept"){
+      const h = pl(a.side, a.who);
+      return acquire(h, a);
+    }
+    if(k === "foul"){
+      if(a.stage === 0){
+        if(BS.carrier){ BS.carrier.stun = 0.6; }
+        BS.mode = "dead"; BS.carrier = null; BS.flight = null; BS.needsRestart = false; teams.carrier = null;
+        a.stage = 1; a.t = 0; return false;
+      }
+      if(a.stage === 1){ if(a.t < 0.7) return false; a.stage = 2; a.t = 0; }
+      return acquire(pl(a.side, a.who), a);
+    }
+    if(k === "kickoff"){
+      if(a.stage === 0){
+        if(clock.elapsedTime - lastGoalAt < 3.6 && a.t < 6 && !a.rush) return false;   // laisser vivre la célébration
+        BS.mode = "dead"; BS.carrier = null; BS.flight = null; BS.needsRestart = false; BS.inHands = false;
+        BS.pos.set(0, 0.11, 0); BS.prev.copy(BS.pos); teams.carrier = null;
+        // l'attaquant se place au rond central pour donner le coup d'envoi
+        const gs = attackDir(a.side), taker = pl(a.side, 9), mate = pl(a.side, 10);
+        taker.pos.set(-gs*0.5, 0, 0.3); taker.vel.set(0,0,0); taker.heading = gs>0 ? Math.PI/2 : -Math.PI/2;
+        mate.pos.set(-gs*1.5, 0, -2.5); mate.vel.set(0,0,0);
+        a.stage = 1; a.t = 0;
+      }
+      return acquire(pl(a.side, 9), a);
+    }
+    if(k === "pass"){
+      const from = pl(a.side, a.from), to = pl(a.side, a.to);
+      if(a.stage === 0){ if(!acquire(from, a)) return false; a.stage = 1; a.t = 0; faceTo(from, to.tgt.x, to.tgt.z, 0.6); from.kick = 1; from.kickAmp = (a.type==="longue"||a.type==="centre") ? 1.15 : 0.75; }
+      if(a.stage === 1){
+        if(a.t < (a.rush ? 0.06 : 0.2)) return false;     // armé de la frappe : le ballon part au contact
+        // point de rencontre : là où le receveur PEUT être quand le ballon arrive (pas une case idéale)
+        const want = _g.set(clamp(to.tgt.x, -HL+0.5, HL-0.5), 0, clamp(to.tgt.z, -HW+0.5, HW-0.5));
+        const spd = (PASS_SPEED[a.type] || 15) * (a.rush ? 1.8 : 1);
+        const T0 = Math.hypot(want.x-BS.pos.x, want.z-BS.pos.z)/spd + 0.15;
+        const run = Math.hypot(want.x-to.pos.x, want.z-to.pos.z), reach = 6.5*T0;
+        const tgt = run > reach ? new T.Vector3(to.pos.x + (want.x-to.pos.x)*reach/run, 0.11, to.pos.z + (want.z-to.pos.z)*reach/run) : new T.Vector3(want.x, 0.11, want.z);
+        const dist = Math.hypot(tgt.x-BS.pos.x, tgt.z-BS.pos.z);
+        const h = a.type==="longue" ? 1 + dist*0.1 : a.type==="centre" ? 2.6 : a.type==="avant" ? 0.35 : 0.05;
+        launch(tgt, spd, h);
+        to.override = tgt.clone().setY(0);
+        a.stage = 2; a.t = 0; return false;
+      }
+      if(BS.mode === "flight") return false;
+      // contrôle : le receveur tend la jambe s'il est à portée
+      if(BS.mode === "loose" && Math.hypot(to.pos.x-BS.pos.x, to.pos.z-BS.pos.z) < 1.7){ giveTo(to); return true; }
+      if(BS.mode === "loose") BS.vel.multiplyScalar(0.6);
+      return acquire(to, a);
+    }
+    if(k === "dribble"){
+      const who = pl(a.side, a.who), def = pl(a.side==="us"?"them":"us", a.past);
+      if(a.stage === 0){
+        if(!acquire(who, a)) return false;
+        a.stage = 1; a.t = 0; a.dir = Math.random()<0.5 ? -1 : 1;
+      }
+      fwdOf(who, _f);
+      const sideV = _g.set(_f.z, 0, -_f.x);                 // vecteur latéral
+      if(a.stage === 1){
+        // le défenseur sort au contact
+        def.override = new T.Vector3(who.pos.x + _f.x*2.2, 0, who.pos.z + _f.z*2.2);
+        who.override = new T.Vector3(who.pos.x + attackDir(a.side)*3, 0, who.pos.z);
+        if(Math.hypot(def.pos.x-who.pos.x, def.pos.z-who.pos.z) > 2.8 && a.t < 1.6) return false;
+        a.stage = 2; a.t = 0;
+        who.feint = {t:0, dir:a.dir, kind:a.move||"crochet"};
+        if(a.move === "petitpont"){
+          const through = new T.Vector3(who.pos.x + _f.x*4.2, 0.11, who.pos.z + _f.z*4.2);
+          launch(through, 9, 0.02);
+          who.override = through.clone().add(sideV.clone().multiplyScalar(a.dir*1.1)).setY(0);
+        } else {
+          BS.lat = a.dir * (a.move==="passement" ? 0.9 : 1.15);   // le ballon est emmené sur le côté
+          who.override = new T.Vector3(who.pos.x + _f.x*1.2 + sideV.x*a.dir*1.4, 0, who.pos.z + _f.z*1.2 + sideV.z*a.dir*1.4);
+        }
+        return false;
+      }
+      if(a.stage === 2){
+        if(a.t < (a.move==="roulette" ? 0.55 : 0.38)) return false;
+        def.stun = 1.1; def.override = null;               // le défenseur est pris à contre-pied
+        if(a.move === "petitpont"){ a.stage = 3; a.t = 0; return false; }
+        BS.bs = who.speed*1.4 + 4;                          // grosse touche pour partir
+        who.override = new T.Vector3(who.pos.x + attackDir(a.side)*6 + sideV.x*a.dir*0.6, 0, who.pos.z + sideV.z*a.dir*0.6);
+        a.stage = 3; a.t = 0; return false;
+      }
+      if(a.move === "petitpont"){ if(BS.mode === "flight") return false; if(!acquire(who, a)) return false; }
+      if(a.t < 0.7) return false;
+      BS.lat = 0; clearOv(who); return true;
+    }
+    if(k === "shot"){
+      const sh = pl(a.side, a.who), gs = attackDir(a.side);
+      const gk = a.side==="us" ? teams.them[0] : teams.us[0];
+      if(a.stage === 0){
+        if(!acquire(sh, a)) return false;
+        a.stage = 1; a.t = 0; faceTo(sh, gs*HL, 0, 0.6); sh.kick = 1; sh.kickAmp = 1.45;
+      }
+      if(a.stage === 1){
+        if(a.t < 0.26) return false;
+        const o = a.outcome, side = Math.random()<0.5 ? -1 : 1;
+        let tgt, speed = rnd(26,31), h = 0, onEnd;
+        if(o === "goal"){
+          tgt = new T.Vector3(gs*(HL+0.9), 0.11, side*rnd(0.6, GOAL_W/2-0.35)); h = rnd(0.1, 1.7);
+          gk.diveDir = Math.sign((-tgt.z) - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.random()<0.6 ? 1 : 0;   // plonge du mauvais côté / trop tard
+          onEnd = ()=>{ BS.mode = "dead"; BS.vel.set(0,0,0); BS.pos.y = 0.3; world.goals[gs>0?1:0].bulge = 1; BS.needsRestart = false; if(pendingGoal){ celebrate(pendingGoal); pendingGoal = null; } else a.goalHit = true; };
+        } else if(o === "saved"){
+          tgt = new T.Vector3(gs*(HL-0.35), 0.11, clamp(gk.pos.z + side*rnd(0.4,1.6), -GOAL_W/2+0.4, GOAL_W/2-0.4)); h = rnd(0.2, 0.9);
+          gk.diveDir = Math.sign(tgt.z - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.abs(tgt.z-gk.pos.z) > 0.9 ? 1 : 0;
+          gk.override = new T.Vector3(tgt.x, 0, tgt.z);
+          onEnd = ()=>{ giveTo(gk, {hands:true}); };
+        } else if(o === "save-great"){
+          tgt = new T.Vector3(gs*(HL-0.2), 0.11, side*rnd(2.6, GOAL_W/2-0.2)); h = rnd(1.0, 1.6);
+          gk.diveDir = Math.sign(tgt.z - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = 1;
+          onEnd = ()=>{ BS.mode = "loose"; BS.vel.set(gs*rnd(1,3), 0, side*rnd(7,10)); BS.lat=0; setTimeout(()=>{ if(BS.mode==="loose"){ BS.mode="dead"; BS.needsRestart=true; } }, 900); };
+        } else if(o === "post"){
+          tgt = new T.Vector3(gs*HL, 0.11, side*GOAL_W/2); h = rnd(0.5, 1.2);
+          onEnd = ()=>{ BS.mode = "loose"; BS.vel.set(-gs*rnd(7,11), 0, rnd(-4,4)); };
+        } else if(o === "corner"){
+          tgt = new T.Vector3(gs*(HL+1.5), 0.11, side*rnd(GOAL_W/2+3, 14)); speed = rnd(18,24); h = 0.6;
+          gk.diveDir = Math.sign(tgt.z - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.random()<0.5?1:0;
+          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; };
+        } else {   // "off" : à côté ou au-dessus
+          const over = Math.random() < 0.4;
+          tgt = new T.Vector3(gs*(HL+6), 0.11, over ? side*rnd(0, 3) : side*rnd(GOAL_W/2+0.8, GOAL_W/2+6)); h = over ? 3.6 : rnd(0.2, 1.8);
+          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; };
+        }
+        launch(tgt, speed, h, onEnd);
+        a.stage = 2; a.t = 0; return false;
+      }
+      if(BS.mode === "flight") return false;
+      if(a.t < 0.35) return false;
+      clearOv(gk); return true;
+    }
+    return true;   // action inconnue : ignorée
+  }
+
+  function updateBallSystem(dt){
+    dbg.simT += dt;
+    // file d'actions (accélérée si elle s'allonge)
+    timeScale = queue.length > 1 ? Math.min(3.2, 1 + (queue.length-1)*0.55) : 1;
+    if(queue.length > 5){ queue.forEach(q=> q.rush = true); if(act) act.rush = true; }   // gros retard : on enchaîne vite
+    const sdt = dt*timeScale;
+    let guard = 0;
+    while(guard++ < 3){
+      if(!act){ if(!queue.length) break; act = queue.shift(); act.t = 0; act.stage = 0; }
+      if(stepAction(act, guard===1 ? sdt : 0)){ dbg.done++; dbg.kinds[act.kind]=(dbg.kinds[act.kind]||0)+1; dbg.time[act.kind]=(dbg.time[act.kind]||0)+act.t; act = null; continue; }
+      break;
+    }
+    BS.prev.copy(BS.pos);
+    if(BS.mode === "flight"){
+      const F = BS.flight; F.t = Math.min(1, F.t + sdt/F.dur);
+      const e = F.t;
+      BS.pos.lerpVectors(F.from, F.to, e);
+      BS.pos.y = Math.max(0.11, lerp(F.from.y, F.to.y, e) + Math.sin(e*Math.PI)*F.h);
+      if(F.t >= 1){
+        BS.vel.subVectors(F.to, F.from).setY(0).normalize().multiplyScalar(Math.min(6, F.from.distanceTo(F.to)/F.dur*0.25));
+        BS.flight = null; BS.mode = "loose";
+        if(F.onEnd) F.onEnd();
+      }
+    } else if(BS.mode === "loose"){
+      BS.vel.y = 0; BS.vel.multiplyScalar(Math.exp(-1.4*dt));
+      BS.pos.addScaledVector(BS.vel, dt); BS.pos.y = lerp(BS.pos.y, 0.11, damp(8,dt));
+      BS.pos.x = clamp(BS.pos.x, -HL-4, HL+4); BS.pos.z = clamp(BS.pos.z, -HW-3, HW+3);
+      if(!act){   // personne n'est chargé de le récupérer : le plus proche s'en occupe
+        let best=null, bd=1e9;
+        teams.us.concat(teams.them).forEach(h=>{ const d=Math.hypot(h.pos.x-BS.pos.x, h.pos.z-BS.pos.z); if(d<bd){ bd=d; best=h; } });
+        if(best){ if(bd < 0.8) giveTo(best); else best.override = BS.pos.clone().setY(0); }
+      }
+    } else if(BS.mode === "held"){
+      const h = BS.carrier;
+      fwdOf(h, _f);
+      if(BS.inHands){
+        _g.set(h.pos.x + _f.x*0.32, 1.05 + h.body.position.y, h.pos.z + _f.z*0.32);
+      } else {
+        // conduite de balle : touche quand le ballon revient dans les pieds, puis il file devant
+        const s = h.speed;
+        BS.bs = lerp(BS.bs, s*0.82, damp(1.3, dt));
+        BS.ahead += (BS.bs - s)*dt;
+        if(s > 1.3 && BS.ahead < 0.34){ BS.ahead = 0.36; BS.bs = s*1.35 + 1.1; h.kick = 1; h.kickAmp = 0.28; BS.footSide = -BS.footSide; }
+        if(s <= 1.3) BS.ahead = lerp(BS.ahead, 0.42, damp(3,dt));
+        BS.ahead = clamp(BS.ahead, 0.3, 1.5);
+        const latV = _g.set(_f.z, 0, -_f.x).multiplyScalar(BS.lat + BS.footSide*0.07);
+        _g.set(h.pos.x + _f.x*BS.ahead + latV.x, 0.11, h.pos.z + _f.z*BS.ahead + latV.z);
+      }
+      BS.pos.lerp(_g, damp(BS.inHands ? 20 : 16, dt));
+      BS.lat = lerp(BS.lat, 0, damp(1.2, dt));
+    }
+    // rotation réaliste du ballon selon son déplacement
+    const dx = BS.pos.x-BS.prev.x, dz = BS.pos.z-BS.prev.z, d = Math.hypot(dx,dz);
+    if(d > 1e-4 && !BS.inHands){ const ax = _ax.set(dz,0,-dx).normalize(); world.ball.rotateOnWorldAxis(ax, d/0.11); }
+    world.ball.position.copy(BS.pos);
+  }
+
+  function celebrate(g){
+    const ours = g.side === "us";
+    const goalSide = ours ? 1 : -1;
+    lastGoalAt = clock.elapsedTime;
+    world.goalPulse = ours ? 1.4 : 0.6;
+    const team = ours ? teams.us : teams.them;
+    const scorer = team[g.idx] || team[9];
+    teams.scorer = scorer;
+    const corner = new T.Vector3(goalSide*(HL-2), 0, (scorer.pos.z>0?1:-1)*(HW-2));
+    team.forEach((h,i)=>{ h.celebrate = i===0 ? 0.6 : 1.6; h.override = null; h.runTo = i===0 ? null : corner.clone().add(new T.Vector3(rnd(-3,3),0,rnd(-3,3))); });
+    scorer.runTo = corner;
+    if(ours){ teams.coach.celebrate = 1.5; launchConfetti(teams.kits.us.slice(0,3).concat(["#d4af37"])); }
+    camState.goalCam = 3.2;
   }
 
   // ---------------------------------------------------------------- simulation des joueurs
@@ -960,9 +1240,11 @@
     const bp = world.ball.position;
     teams.all.forEach(h=>{
       h.smoothTgt.lerp(h.tgt, damp(h===teams.carrier ? 5 : 2.2, dt));
-      const desired = _v1.subVectors(h.smoothTgt, h.pos); desired.y = 0;
+      const goal = h.override || h.smoothTgt;
+      const desired = _v1.subVectors(goal, h.pos); desired.y = 0;
       const dist = desired.length();
-      const maxSp = h.isCoach ? 1.6 : (h.isGK ? 5 : (h===teams.carrier ? 8.5 : 7.2));
+      let maxSp = h.isCoach ? 1.6 : (h.isGK ? (h.override ? 6.5 : 5) : (h.override ? 8.3 : (h===teams.carrier ? 7.6 : 7.2)));
+      if(h.stun > 0){ maxSp *= 0.3; h.stun = Math.max(0, h.stun - dt); }
       const want = Math.min(maxSp, dist*1.6);
       if(dist>0.001) desired.multiplyScalar(want/dist);
       h.vel.lerp(desired, damp(h.isCoach?2:4.5, dt));
@@ -971,7 +1253,8 @@
       h.speed = h.vel.length();
       // orientation : sens de course si rapide, sinon regard vers le ballon
       let face;
-      if(cur.showcase && !h.isCoach) face = 0;
+      if(h.faceT > 0 && h.faceTo){ face = Math.atan2(h.faceTo.x-h.pos.x, h.faceTo.z-h.pos.z); h.faceT -= dt; }
+      else if(cur.showcase && !h.isCoach) face = 0;
       else if(h.isCoach) face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
       else if(h.speed > 1.2) face = Math.atan2(h.vel.x, h.vel.z);
       else face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
@@ -985,7 +1268,8 @@
         h.armL.sh.rotation.x = -0.2;
       }
       if(h.isLinesman){ h.armR.sh.rotation.x = -0.15; }
-      if(h.isGK && h.dive<=0 && h.celebrate<=0){
+      if(h === BS.carrier && BS.inHands){ h.armL.sh.rotation.x = -1.2; h.armR.sh.rotation.x = -1.2; h.armL.sh.rotation.z = 0.25; h.armR.sh.rotation.z = -0.25; }
+      else if(h.isGK && h.dive<=0 && h.celebrate<=0){
         // posture d'attente du gardien quand le ballon approche
         const near = clamp(1 - Math.abs(bp.x - h.pos.x)/30, 0, 1);
         h.armL.sh.rotation.z = 0.12 + near*0.6; h.armR.sh.rotation.z = -0.12 - near*0.6;
@@ -1097,13 +1381,13 @@
     const dtRaw = clock.getDelta();
     acc += dtRaw;
     if(cur.showcase && acc < 1/30) return;      // avant-match : 30 i/s suffisent, on épargne la batterie
-    const dt = Math.min(0.05, acc); acc = 0;
+    const dt = Math.min(window.__S3D_MAXDT || 0.1, acc); acc = 0;   // __S3D_MAXDT : réservé aux tests (rendu logiciel lent)
     const t = clock.elapsedTime;
     const m = cur.m;
     resizeIfNeeded();
     syncTargets(m, false);
     updatePlayers(dt, t);
-    if(!m.showcase) updateBall(m, dt); else world.ball.position.set(0, 0.11, 0);
+    if(!m.showcase) updateBallSystem(dt); else world.ball.position.set(0, 0.11, 0);
     updateCamera(dt, t);
     if(!m.showcase) updateScreens(m);
     // ambiance : excitation de la foule (selon le score, la possession et les buts)
@@ -1209,6 +1493,7 @@
     // dernier commentaire du match en bandeau (passes, frappes, buts...)
     const tk = h.querySelector("#s3dTicker"), last = m.log && m.log[m.log.length-1];
     const n = m.log ? m.log.length : 0;
+    if(tk) tk.style.display = S.tickerOn() ? "" : "none";
     if(tk && last && tk.dataset.n !== String(n)){
       tk.dataset.n = String(n);
       tk.innerHTML = `<span class="s3d-tmin">${last.min}'</span>`;
@@ -1266,8 +1551,7 @@
     if(newMatch){
       fsOn = false; camState.goalCam = 0;
       buildTeams(m);
-      world.ballState.x = toX(m.pos?m.pos.ball.x:50); world.ballState.z = toZ(m.pos?m.pos.ball.y:50);
-      world.ballState.tgtX = world.ballState.x; world.ballState.tgtZ = world.ballState.z;
+      resetBall(m);
       // nouvelle pub LED avec le nom des équipes
       const old = world.adTex; const fresh = makeAdTexture(m.ctx==="club" ? clubName() : "les Bleus", m.opp);
       old.image = fresh.image; old.needsUpdate = true;
@@ -1318,20 +1602,23 @@
 
   S.onGoal = function(m, side, idx){
     if(!cur || cur.m !== m || !teams) return;
-    const ours = side === "us";
-    const goalSide = ours ? 1 : -1;
-    const B = world.ballState;
-    B.inNet = 2.4; B.netX = goalSide*(HL+1.4); B.netZ = rnd(-GOAL_W/2+0.6, GOAL_W/2-0.6); B.netY = rnd(0.2,1.6);
-    world.goals[goalSide>0?1:0].bulge = 1;
-    world.goalPulse = ours ? 1.4 : 0.6;
-    const team = ours ? teams.us : teams.them;
-    const scorer = team[idx] || team[9];
-    teams.scorer = scorer;
-    const corner = new T.Vector3(goalSide*(HL-2), 0, (scorer.pos.z>0?1:-1)*(HW-2));
-    team.forEach((h,i)=>{ h.celebrate = i===0 ? 0.6 : 1.6; h.runTo = i===0 ? null : corner.clone().add(new T.Vector3(rnd(-3,3),0,rnd(-3,3))); });
-    scorer.runTo = corner;
-    if(ours){ teams.coach.celebrate = 1.5; launchConfetti(teams.kits.us.slice(0,3).concat(["#d4af37"])); }
-    camState.goalCam = 3.2;
+    const g = {side, idx};
+    const shotPending = (act && act.kind==="shot" && act.outcome==="goal" && !act.goalHit) || queue.some(a=> a.kind==="shot" && a.outcome==="goal");
+    if(shotPending) pendingGoal = g;            // la fête démarrera quand le ballon touchera le filet
+    else {
+      if(BS.mode !== "dead"){ const gs = side==="us"?1:-1; BS.mode="dead"; BS.carrier=null; BS.pos.set(gs*(HL+1), 0.3, rnd(-2.5,2.5)); world.goals[gs>0?1:0].bulge = 1; }
+      celebrate(g);
+    }
+  };
+  // Diagnostic (tests) : état du ballon et de la file d'actions
+  S._debug = ()=>({dbg:JSON.parse(JSON.stringify(dbg)), mode:BS.mode, carrier: BS.carrier ? BS.carrier.side+BS.carrier.idx : null, q:queue.length, act: act ? act.kind : null,
+    ball:[+BS.pos.x.toFixed(1), +BS.pos.y.toFixed(2), +BS.pos.z.toFixed(1)],
+    footDist: BS.carrier ? +Math.hypot(BS.carrier.pos.x-BS.pos.x, BS.carrier.pos.z-BS.pos.z).toFixed(2) : null});
+  // Actions de jeu envoyées par le moteur de match (cf. playPassChain / playSequence dans index.html)
+  S.onAction = function(m, a){
+    if(!cur || cur.m !== m || !teams || cur.showcase) return;
+    queue.push(Object.assign({}, a)); dbg.pushed++;
+    if(queue.length > 16) queue.splice(0, queue.length-16);
   };
 
   // Écran de chargement : crée le renderer et compile les shaders du stade pendant la barre de
