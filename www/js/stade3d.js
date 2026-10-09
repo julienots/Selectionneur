@@ -594,6 +594,10 @@
     scene.add(world.confetti);
 
     world.excite = 0.3; world.goalPulse = 0;
+    // anneau "joueur au ballon" (façon FIFA) sous le porteur
+    const markGeo = new T.RingGeometry(0.55, 0.72, 32); markGeo.rotateX(-Math.PI/2);
+    world.ring = new T.Mesh(markGeo, new T.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.85, depthWrite:false}));
+    world.ring.renderOrder = 2; world.ring.visible = false; scene.add(world.ring);
   }
 
   function buildGoal(side){
@@ -847,6 +851,13 @@
       else { h.body.rotation.z = Math.sin(u*Math.PI)*0.42*f.dir; h.body.position.x = Math.sin(u*Math.PI)*0.25*f.dir; }
       if(u >= 1){ h.feint = null; h.body.rotation.y = 0; h.legL.hp.rotation.z = 0; }
     }
+    // saut (jeu de tête) et contrôle de la poitrine
+    if(h.jump > 0){ const u = 1-h.jump; h.body.position.y += Math.sin(u*Math.PI)*0.55; h.spine.rotation.x += Math.sin(u*Math.PI*1.3)*0.5 - 0.15;
+      h.armL.sh.rotation.z = 0.9; h.armR.sh.rotation.z = -0.9; h.jump = Math.max(0, h.jump - dt*1.6); }
+    if(h.chest > 0){ h.spine.rotation.x -= Math.sin((1-h.chest)*Math.PI)*0.45; h.chest = Math.max(0, h.chest - dt*2.2); }
+    // inclinaison dans les virages (vitesse angulaire) et regard qui suit le ballon
+    h.body.rotation.z += clamp(-(h.turnRate||0)*0.06*clamp(sp/6,0,1), -0.3, 0.3);
+    if(h.lookYaw !== undefined){ h.headG.rotation.y = lerp(h.headG.rotation.y, h.lookYaw, Math.min(1, dt*8)); h.headG.rotation.x = lerp(h.headG.rotation.x, h.lookPitch||0, Math.min(1, dt*6)); }
     // défenseur éliminé : déséquilibre
     if(h.stun > 0){ h.body.rotation.x = -0.32*Math.min(1, h.stun); h.body.rotation.z += Math.sin(t*9)*0.08*h.stun; }
     // célébration : bras en l'air + sauts
@@ -905,6 +916,7 @@
     paintCrowd(kits.us, kits.them);
     // positions initiales = positions courantes du match
     syncTargets(m, true);
+    recInit();
   }
 
   // Lit m.pos (pourcentages du moteur 2D) et fixe les cibles 3D.
@@ -939,6 +951,14 @@
     }
     teams.carrier = BS.carrier;
     const bxw = world.ball.position.x, bzw = world.ball.position.z;
+    // gardiens : sur la ligne ballon -> centre du but, plus avancés quand le ballon est loin
+    [["us",-1],["them",1]].forEach(([sd, gx])=>{
+      const gk = teamArr(sd)[0];
+      if(!gk || gk === BS.carrier) return;
+      const gxw = gx*HL, dx = bxw - gxw, dz = bzw, d = Math.hypot(dx, dz) || 1;
+      const out = clamp(d*0.06, 0.8, 5.5);
+      gk.tgt.set(gxw + dx/d*out, 0, clamp(dz/d*out*1.4, -GOAL_W/2+0.3, GOAL_W/2-0.3));
+    });
     // arbitre : diagonale, ~12 m du ballon
     teams.ref.tgt.set(clamp(bxw-9, -HL+8, HL-8), 0, clamp(bzw+11, -HW+3, HW-3));
     // juges de touche : alignés sur l'avant-dernier défenseur de chaque moitié
@@ -972,6 +992,9 @@
   }
   function clearOv(h){ if(h){ h.override = null; } }
   function giveTo(h, opts){
+    BS.vy = 0;
+    // contrôle de la poitrine / de la cuisse si le ballon arrive haut
+    if(BS.pos.y > 0.9 && !(opts && opts.hands)){ h.chest = 1; }
     BS.carrier = h; BS.mode = "held"; BS.flight = null; BS.ahead = 0.45; BS.bs = h.speed; BS.lat = 0;
     BS.inHands = !!(opts && opts.hands); BS.needsRestart = false;
     teams.carrier = h; h.override = null;
@@ -981,7 +1004,9 @@
     BS.mode = "flight"; BS.carrier = null; BS.inHands = false;
     const from = BS.pos.clone(); if(from.y < 0.11) from.y = 0.11;
     const dist = Math.hypot(target.x-from.x, target.z-from.z);
-    BS.flight = {from, to:target.clone(), t:0, dur:clamp(dist/speed, 0.12, 2.4), h:h||0, onEnd};
+    let dur = clamp(dist/speed, 0.12, 2.4);
+    if((h||0) > 1.2) dur = Math.max(dur, Math.sqrt(8*h/9.81));   // un ballon aérien met le temps de la gravité
+    BS.flight = {from, to:target.clone(), t:0, dur, h:h||0, onEnd};
     teams.carrier = null;
   }
   // Fait venir le joueur h au ballon (ou le lui fait récupérer). true quand h a le ballon au pied.
@@ -1045,6 +1070,7 @@
     }
     if(k === "kickoff"){
       if(a.stage === 0){
+        if(RP.on || RP.pendingAt) return false;                                          // attendre la fin du ralenti
         if(clock.elapsedTime - lastGoalAt < 3.6 && a.t < 6 && !a.rush) return false;   // laisser vivre la célébration
         BS.mode = "dead"; BS.carrier = null; BS.flight = null; BS.needsRestart = false; BS.inHands = false;
         BS.pos.set(0, 0.11, 0); BS.prev.copy(BS.pos); teams.carrier = null;
@@ -1061,6 +1087,11 @@
       if(a.stage === 0){ if(!acquire(from, a)) return false; a.stage = 1; a.t = 0; faceTo(from, to.tgt.x, to.tgt.z, 0.6); from.kick = 1; from.kickAmp = (a.type==="longue"||a.type==="centre") ? 1.15 : 0.75; }
       if(a.stage === 1){
         if(a.t < (a.rush ? 0.06 : 0.2)) return false;     // armé de la frappe : le ballon part au contact
+        if(a.header){   // centre pour une tête : le ballon est envoyé sur la tête du receveur
+          const tg = new T.Vector3(clamp(to.tgt.x, -HL+2, HL-2), 1.9, clamp(to.tgt.z, -HW+2, HW-2));
+          launch(tg, 21, 2.4); to.override = tg.clone().setY(0);
+          a.stage = 3; a.t = 0; return false;
+        }
         // point de rencontre : là où le receveur PEUT être quand le ballon arrive (pas une case idéale)
         const want = _g.set(clamp(to.tgt.x, -HL+0.5, HL-0.5), 0, clamp(to.tgt.z, -HW+0.5, HW-0.5));
         const spd = (PASS_SPEED[a.type] || 15) * (a.rush ? 1.8 : 1);
@@ -1073,6 +1104,7 @@
         to.override = tgt.clone().setY(0);
         a.stage = 2; a.t = 0; return false;
       }
+      if(a.stage === 3) return BS.mode !== "flight" || BS.flight.t > 0.75;   // la tête suit : pas de contrôle
       if(BS.mode === "flight") return false;
       // contrôle : le receveur tend la jambe s'il est à portée
       if(BS.mode === "loose" && Math.hypot(to.pos.x-BS.pos.x, to.pos.z-BS.pos.z) < 1.7){ giveTo(to); return true; }
@@ -1119,6 +1151,13 @@
     if(k === "shot"){
       const sh = pl(a.side, a.who), gs = attackDir(a.side);
       const gk = a.side==="us" ? teams.them[0] : teams.us[0];
+      if(a.stage === 0 && a.header){
+        // reprise de la tête sur un centre : le tireur attaque le ballon en l'air, sans contrôle
+        if(BS.mode === "flight"){ sh.override = _g.copy(BS.flight.to).setY(0).clone(); if(BS.flight.t < 0.78) return false; }
+        sh.jump = 1; faceTo(sh, gs*HL, 0, 0.6);
+        BS.carrier = null; BS.flight = null; BS.mode = "loose"; BS.pos.set(sh.pos.x + Math.sin(sh.heading)*0.2, 1.95, sh.pos.z + Math.cos(sh.heading)*0.2);
+        a.stage = 1; a.t = 0.2;
+      }
       if(a.stage === 0){
         if(!acquire(sh, a)) return false;
         a.stage = 1; a.t = 0; faceTo(sh, gs*HL, 0, 0.6); sh.kick = 1; sh.kickAmp = 1.45;
@@ -1126,7 +1165,7 @@
       if(a.stage === 1){
         if(a.t < 0.26) return false;
         const o = a.outcome, side = Math.random()<0.5 ? -1 : 1;
-        let tgt, speed = rnd(26,31), h = 0, onEnd;
+        let tgt, speed = a.header ? rnd(15,19) : rnd(26,31), h = 0, onEnd;
         if(o === "goal"){
           tgt = new T.Vector3(gs*(HL+0.9), 0.11, side*rnd(0.6, GOAL_W/2-0.35)); h = rnd(0.1, 1.7);
           gk.diveDir = Math.sign((-tgt.z) - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.random()<0.6 ? 1 : 0;   // plonge du mauvais côté / trop tard
@@ -1178,16 +1217,22 @@
     if(BS.mode === "flight"){
       const F = BS.flight; F.t = Math.min(1, F.t + sdt/F.dur);
       const e = F.t;
-      BS.pos.lerpVectors(F.from, F.to, e);
-      BS.pos.y = Math.max(0.11, lerp(F.from.y, F.to.y, e) + Math.sin(e*Math.PI)*F.h);
+      // au sol : le ballon part vite puis ralentit (frottement) ; en l'air : vraie parabole
+      const eg = F.h < 0.5 ? 1 - Math.pow(1-e, 1.6) : e;
+      BS.pos.lerpVectors(F.from, F.to, eg);
+      BS.pos.y = Math.max(0.11, lerp(F.from.y, F.to.y, e) + 4*F.h*e*(1-e));
       if(F.t >= 1){
         BS.vel.subVectors(F.to, F.from).setY(0).normalize().multiplyScalar(Math.min(6, F.from.distanceTo(F.to)/F.dur*0.25));
+        BS.vy = F.h > 0.8 ? 4*F.h/F.dur*0.42 : 0;     // rebond à l'arrivée d'un ballon aérien
         BS.flight = null; BS.mode = "loose";
         if(F.onEnd) F.onEnd();
       }
     } else if(BS.mode === "loose"){
       BS.vel.y = 0; BS.vel.multiplyScalar(Math.exp(-1.4*dt));
-      BS.pos.addScaledVector(BS.vel, dt); BS.pos.y = lerp(BS.pos.y, 0.11, damp(8,dt));
+      BS.pos.addScaledVector(BS.vel, dt);
+      // gravité + rebonds amortis
+      BS.vy = (BS.vy||0) - 9.81*dt; BS.pos.y += BS.vy*dt;
+      if(BS.pos.y <= 0.11){ BS.pos.y = 0.11; BS.vy = Math.abs(BS.vy) > 1.2 ? -BS.vy*0.45 : 0; }
       BS.pos.x = clamp(BS.pos.x, -HL-4, HL+4); BS.pos.z = clamp(BS.pos.z, -HW-3, HW+3);
       if(!act){   // personne n'est chargé de le récupérer : le plus proche s'en occupe
         let best=null, bd=1e9;
@@ -1232,6 +1277,7 @@
     scorer.runTo = corner;
     if(ours){ teams.coach.celebrate = 1.5; launchConfetti(teams.kits.us.slice(0,3).concat(["#d4af37"])); }
     camState.goalCam = 3.2;
+    RP.goalT = clock.elapsedTime; RP.gs = goalSide; RP.pendingAt = clock.elapsedTime + 2.6;
   }
 
   // ---------------------------------------------------------------- simulation des joueurs
@@ -1259,7 +1305,15 @@
       else if(h.speed > 1.2) face = Math.atan2(h.vel.x, h.vel.z);
       else face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
       let dh = face - h.heading; while(dh>Math.PI) dh-=Math.PI*2; while(dh<-Math.PI) dh+=Math.PI*2;
-      h.heading += dh*damp(7,dt);
+      const dHead = dh*damp(7,dt);
+      h.heading += dHead; h.turnRate = dHead/Math.max(dt,1e-3);
+      // la tête suit le ballon (dans la limite d'une rotation naturelle du cou)
+      if(!h.isCoach){
+        let ly = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z) - h.heading; while(ly>Math.PI) ly-=Math.PI*2; while(ly<-Math.PI) ly+=Math.PI*2;
+        h.lookYaw = clamp(ly, -1.1, 1.1);
+        const dd = Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z);
+        h.lookPitch = clamp(Math.atan2(1.6 - bp.y, dd) * 0.6, -0.5, 0.55);
+      }
       h.root.position.copy(h.pos);
       h.root.rotation.y = h.heading;
       poseHumanoid(h, dt, t);
@@ -1372,6 +1426,97 @@
     });
   }
 
+  // ---------------------------------------------------------------- ralentis (v47)
+  // Enregistreur circulaire : à chaque image, pose complète des 26 personnages + ballon + filets.
+  // Après un but, on rejoue les ~5 dernières secondes au ralenti sous un autre angle, puis on
+  // restaure l'instant présent (la simulation est figée pendant le ralenti).
+  const REC = {cap:420, per:28, stride:0, buf:null, times:null, head:0, count:0, objs:null, snap:null};
+  const RP = {on:false, pendingAt:0, goalT:0, t0:0, t1:0, cur:0, speed:0.6, gs:1, angle:0};
+  const _q1 = new T.Quaternion(), _q2 = new T.Quaternion();
+  function jointsOf(h){ return [h.root, h.body, h.spine, h.headG, h.legL.hp, h.legL.kn, h.legR.hp, h.legR.kn, h.armL.sh, h.armL.el, h.armR.sh, h.armR.el]; }
+  function recInit(){
+    REC.objs = teams.all.map(jointsOf);
+    REC.stride = REC.objs.length*REC.per + 7 + 2 + 3;
+    REC.buf = new Float32Array(REC.cap*REC.stride); REC.times = new Float32Array(REC.cap);
+    REC.snap = new Float32Array(REC.stride);
+    REC.head = 0; REC.count = 0; RP.on = false; RP.pendingAt = 0;
+  }
+  function recWrite(arr, o){
+    for(const j of REC.objs){
+      arr[o++]=j[0].position.x; arr[o++]=j[0].position.y; arr[o++]=j[0].position.z; arr[o++]=j[0].rotation.y;
+      arr[o++]=j[1].position.x; arr[o++]=j[1].position.y; arr[o++]=j[1].rotation.x; arr[o++]=j[1].rotation.y; arr[o++]=j[1].rotation.z;
+      arr[o++]=j[2].rotation.x; arr[o++]=j[3].rotation.x; arr[o++]=j[3].rotation.y;
+      for(let k=4;k<12;k++){ arr[o++]=j[k].rotation.x; arr[o++]=j[k].rotation.z; }
+    }
+    const b = world.ball; arr[o++]=b.position.x; arr[o++]=b.position.y; arr[o++]=b.position.z;
+    arr[o++]=b.quaternion.x; arr[o++]=b.quaternion.y; arr[o++]=b.quaternion.z; arr[o++]=b.quaternion.w;
+    arr[o++]=world.goals[0].back.position.x; arr[o++]=world.goals[1].back.position.x;
+    arr[o++]=world.ring.visible?1:0; arr[o++]=world.ring.position.x; arr[o++]=world.ring.position.z;
+  }
+  function recApply(A, oa, B, ob, u){
+    const L = (i)=> A[oa+i] + (B[ob+i]-A[oa+i])*u;
+    let i = 0;
+    for(const j of REC.objs){
+      j[0].position.set(L(i),L(i+1),L(i+2)); j[0].rotation.y = L(i+3);
+      j[1].position.x = L(i+4); j[1].position.y = L(i+5); j[1].rotation.set(L(i+6),L(i+7),L(i+8));
+      j[2].rotation.x = L(i+9); j[3].rotation.x = L(i+10); j[3].rotation.y = L(i+11);
+      let k2 = i+12; for(let k=4;k<12;k++){ j[k].rotation.x = L(k2); j[k].rotation.z = L(k2+1); k2+=2; }
+      i += REC.per;
+    }
+    world.ball.position.set(L(i),L(i+1),L(i+2));
+    _q1.set(A[oa+i+3],A[oa+i+4],A[oa+i+5],A[oa+i+6]); _q2.set(B[ob+i+3],B[ob+i+4],B[ob+i+5],B[ob+i+6]);
+    world.ball.quaternion.copy(_q1).slerp(_q2, u);
+    world.goals[0].back.position.x = L(i+7); world.goals[1].back.position.x = L(i+8);
+    world.ring.visible = A[oa+i+9] > 0.5; world.ring.position.set(L(i+10), 0.025, L(i+11));
+  }
+  function recFrame(t){
+    if(!REC.buf || RP.on) return;
+    recWrite(REC.buf, REC.head*REC.stride); REC.times[REC.head] = t;
+    REC.head = (REC.head+1) % REC.cap; REC.count = Math.min(REC.count+1, REC.cap);
+  }
+  function recSeek(tq){
+    // cherche les deux images encadrant l'instant tq (ordre chronologique dans le tampon circulaire)
+    const n = REC.count, start = (REC.head - n + REC.cap) % REC.cap;
+    let prev = start;
+    for(let k=1;k<n;k++){
+      const idx = (start + k) % REC.cap;
+      if(REC.times[idx] >= tq){ const ta = REC.times[prev], tb = REC.times[idx]; return [prev, idx, tb>ta ? (tq-ta)/(tb-ta) : 0]; }
+      prev = idx;
+    }
+    return [prev, prev, 0];
+  }
+  function startReplay(){
+    if(REC.count < 20){ RP.pendingAt = 0; return; }
+    recWrite(REC.snap, 0);
+    const n = REC.count, first = REC.times[(REC.head - n + REC.cap) % REC.cap];
+    RP.t0 = Math.max(first, RP.goalT - 4.0); RP.t1 = RP.goalT + 0.7; RP.cur = RP.t0;   // ≈ 8 s à 0,6x
+    RP.on = true; RP.pendingAt = 0; RP.angle = Math.random() < 0.5 ? 0 : 1;
+    if(cur && cur.container) cur.container.classList.add("s3d-replaying");
+    camState.lastMode = "replay";
+  }
+  function endReplay(){
+    if(!RP.on) return;
+    recApply(REC.snap, 0, REC.snap, 0, 0);
+    RP.on = false;
+    if(cur && cur.container) cur.container.classList.remove("s3d-replaying");
+    camState.lastMode = "fin-replay";
+    lastGoalAt = clock.elapsedTime - 1.5;   // le coup d'envoi peut suivre rapidement
+  }
+  S.skipReplay = ()=> endReplay();
+  function replayStep(dtRaw){
+    RP.cur += dtRaw*RP.speed;
+    if(RP.cur >= RP.t1){ endReplay(); return; }
+    const [a, b, u] = recSeek(RP.cur);
+    recApply(REC.buf, a*REC.stride, REC.buf, b*REC.stride, u);
+    // caméra du ralenti : derrière le but ou au ras de la pelouse, toujours sur le ballon
+    const bp = world.ball.position, gs = RP.gs;
+    const p = RP.angle === 0 ? _f.set(gs*(HL+9), 3.0, bp.z*0.4) : _f.set(bp.x - gs*7, 1.6, bp.z + 8);
+    camState.pos.lerp(p, camState.lastMode === "replay" ? 1 : 0.12); camState.lastMode = "replay-on";
+    camState.look.lerp(bp, 0.25);
+    camera.position.copy(camState.pos); camera.lookAt(camState.look);
+    if(Math.abs(camera.fov - 34) > 0.1){ camera.fov = 34; camera.updateProjectionMatrix(); }
+  }
+
   // ---------------------------------------------------------------- boucle
   let acc = 0;
   function frame(){
@@ -1385,9 +1530,20 @@
     const t = clock.elapsedTime;
     const m = cur.m;
     resizeIfNeeded();
+    if(!m.showcase && RP.pendingAt && t >= RP.pendingAt) startReplay();
+    if(RP.on){
+      replayStep(dtRaw > 0.1 ? 0.1 : dtRaw);
+      const cu0 = world.crowd.material.uniforms; cu0.time.value = t; cu0.excite.value = world.excite; cu0.flash.value = 0.6;
+      updateHud(m);
+      renderer.render(scene, camera);
+      return;
+    }
     syncTargets(m, false);
     updatePlayers(dt, t);
     if(!m.showcase) updateBallSystem(dt); else world.ball.position.set(0, 0.11, 0);
+    const rc = !m.showcase && BS.carrier;
+    world.ring.visible = !!rc;
+    if(rc){ world.ring.position.set(rc.pos.x, 0.025, rc.pos.z); world.ring.material.color.set(rc.side==="us" ? teams.kits.us[0] : teams.kits.them[0]); world.ring.scale.setScalar(1 + Math.sin(t*6)*0.06); }
     updateCamera(dt, t);
     if(!m.showcase) updateScreens(m);
     // ambiance : excitation de la foule (selon le score, la possession et les buts)
@@ -1413,7 +1569,7 @@
       pos.needsUpdate = true;
     }
     if(world.confetti.visible) updateConfetti(dt);
-    if(!m.showcase) updateHud(m);
+    if(!m.showcase){ updateHud(m); recFrame(t); }
     renderer.render(scene, camera);
   }
 
@@ -1450,7 +1606,8 @@
         <button class="s3d-btn" id="s3d2d" title="Vue 2D">2D</button>
       </div>
       <div class="s3d-carrier" id="s3dCarrier"></div>
-      <div class="s3d-ticker" id="s3dTicker"></div>`;
+      <div class="s3d-ticker" id="s3dTicker"></div>
+      <div class="s3d-replay"><span>⟲ RALENTI</span><button class="s3d-btn" id="s3dSkip">Passer ⏭</button></div>`;
     container.appendChild(hud);
     const q = (id)=> hud.querySelector("#"+id);
     q("s3dCamLbl").textContent = CAM_MODES[camMode];
@@ -1458,6 +1615,7 @@
     const pl = q("s3dPace").querySelector("[data-pace-label]");
     if(typeof MATCH_PACES !== "undefined" && typeof matchPaceKey === "function"){ pl.textContent = MATCH_PACES[matchPaceKey()].label.split(" ")[0]; q("s3dPace").onclick = (e)=>{ e.stopPropagation(); cycleMatchPace(); }; }
     else q("s3dPace").remove();
+    q("s3dSkip").onclick = (e)=>{ e.stopPropagation(); endReplay(); };
     q("s3dFs").onclick = (e)=>{ e.stopPropagation(); fsOn = !fsOn; applyFs(); };
     q("s3d2d").onclick = (e)=>{ e.stopPropagation(); fsOn = false; applyFs(); S.setEnabled(false); stop(); if(typeof window.render==="function") window.render(); };
     return hud;
@@ -1549,7 +1707,7 @@
     world.weather.material.color.set(cur.weatherKind==="neige" ? 0xffffff : 0xbcd0ff);
     applyLighting(wk);
     if(newMatch){
-      fsOn = false; camState.goalCam = 0;
+      fsOn = false; camState.goalCam = 0; RP.on = false; RP.pendingAt = 0;
       buildTeams(m);
       resetBall(m);
       // nouvelle pub LED avec le nom des équipes

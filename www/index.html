@@ -716,6 +716,28 @@ v46 — Demande de Julien : "change tous les designs de l'appli sauf les matchs"
 ATTENTION si vous reprenez ce chantier : pour styler un nouvel écran hors match, préfixez aussi par
 body:not(.in-live) (sinon la règle s'appliquerait au match). Les variables --gold/--chalk/--line
 sont redéfinies dans ce thème hors match.
+
+v47 — Demande de Julien : "encore plus de détails aux matchs et des cartes joueurs, des joueurs
+réalistes, mouvements précis, ballon super précis en mouvement, des trucs comme FIFA". [FAIT] :
+- CARTES JOUEURS "ULTIMATE TEAM" (bloc "v47 : CARTES JOUEURS" avant renderEffectif) :
+  futRatings(p) = note globale + 6 stats d'affichage (VIT/TIR/PAS/DRI/DEF/PHY ; PLO/JMA/DÉG/RÉF/VIT/PLA
+  pour les GB) dérivées d'attaque/défense/endurance/forme + variation stable par joueur (futSeed) —
+  purement visuel, aucune influence sur la simulation. futCardHTML(p) : raretés bronze/argent/or
+  selon la note, special (noire), legend (ivoire), elite (violette), icone (crème dorée), avatar SVG
+  (futAvatarSVG), bandeau BANNI/BLESSÉ. Effectif : bascule "Cartes / Liste" (localStorage
+  "sel-squadview", défaut cartes). Fiche joueur (onglet Aperçu) : grande carte animée. Match :
+  carte du buteur qui glisse sur le terrain après un but des nôtres (showGoalCard).
+- MATCH 3D (stade3d.js) : vraie physique du ballon (parabole, durée de vol imposée par la gravité,
+  passes au sol qui ralentissent, rebonds amortis BS.vy), contrôle de la poitrine sur ballon haut,
+  REPRISES DE LA TÊTE sur centre (action pass/shot avec header:true, saut + tête, commentaire dédié),
+  tête des joueurs qui suit le ballon, inclinaison dans les virages, gardien placé sur la bissectrice
+  ballon/but, anneau de couleur sous le porteur (façon FIFA).
+- RALENTIS : enregistreur circulaire (REC, ~420 images : pose complète des 26 personnages + ballon
+  + filets). 2,6 s après un but, le but est rejoué au ralenti (0,6x, ~8 s) sous un angle bas ou
+  derrière le but, bandes cinéma + bouton "Passer" (Stade3D.skipReplay), puis retour exact à
+  l'instant présent (instantané REC.snap). Le coup d'envoi attend la fin du ralenti.
+ATTENTION si vous reprenez ce chantier : si vous ajoutez une articulation animée aux humanoïdes,
+ajoutez-la dans jointsOf()/recWrite()/recApply() (et REC.per) sinon elle sera figée en ralenti.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1367,7 +1389,7 @@ button:active, .btn:active, .slot-pick:active, .talk-option:active{transform:sca
 .pitch-wrap.mode3d{height:clamp(250px, 66vw, 340px); background:#03050b; border:1px solid rgba(212,175,55,0.35);
   box-shadow:0 14px 34px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.04); perspective:none;}
 .pitch-wrap.mode3d::before, .pitch-wrap.mode3d::after{display:none;}
-.pitch-wrap.mode3d > :not(.s3d-layer):not(.s3d-hud):not(.goal-flash){display:none !important;}
+.pitch-wrap.mode3d > :not(.s3d-layer):not(.s3d-hud):not(.goal-flash):not(.goal-card-pop){display:none !important;}
 .s3d-layer{position:absolute; inset:0; z-index:1;}
 .s3d-canvas{width:100% !important; height:100% !important; display:block; touch-action:pan-y;}
 .s3d-hud{position:absolute; inset:0; z-index:6; pointer-events:none; font-family:'Barlow Condensed',sans-serif;}
@@ -1767,6 +1789,65 @@ body:not(.in-live) .opp-lineup-head b{color:var(--ink);} body:not(.in-live) .opp
 body:not(.in-live) .action-btn{background:var(--card-2); border:1px solid var(--line); border-radius:14px; color:var(--ink);}
 body:not(.in-live) .action-btn:active{background:var(--card-3); border-color:rgba(61,123,255,0.5);}
 body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .info-chip .ic-lab{color:var(--ink-3);}
+
+/* ---- v47 : cartes joueurs façon "Ultimate Team" (futCardHTML) ---- */
+.fut-grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:10px 8px; margin-top:4px;}
+.fut-card{--c1:#f7e08a; --c2:#c99a2e; --ink:#2b2104; --line:rgba(43,33,4,0.25);
+  position:relative; aspect-ratio:0.7; border-radius:10px; overflow:hidden; cursor:pointer; color:var(--ink);
+  background:radial-gradient(ellipse 90% 60% at 50% 30%, rgba(255,255,255,0.45), transparent 60%), linear-gradient(160deg, var(--c1), var(--c2));
+  clip-path:polygon(50% 0%, 88% 4%, 100% 12%, 100% 86%, 50% 100%, 0% 86%, 0% 12%, 12% 4%);
+  box-shadow:0 10px 22px rgba(0,0,0,0.45); transition:transform .15s ease; font-family:'Barlow Condensed',sans-serif;
+  display:flex; flex-direction:column; align-items:center; padding:9% 6% 12%;}
+.fut-card:active{transform:scale(0.96);}
+.fut-card::before{content:''; position:absolute; inset:4px; clip-path:inherit; border:1.5px solid var(--line); border-radius:8px; pointer-events:none;
+  background:repeating-linear-gradient(125deg, rgba(255,255,255,0.06) 0 6px, transparent 6px 14px);}
+.fut-shine{position:absolute; inset:0; pointer-events:none; background:linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.55) 45%, transparent 58%);
+  background-size:260% 100%; animation:futShine 5s ease-in-out infinite; mix-blend-mode:overlay;}
+@keyframes futShine{0%,65%{background-position:130% 0;} 100%{background-position:-130% 0;}}
+.fut-top{position:absolute; left:9%; top:12%; display:flex; flex-direction:column; align-items:center; line-height:1; z-index:2;}
+.fut-ovr{font-family:'Bebas Neue',sans-serif; font-size:clamp(20px, 7vw, 30px);}
+.fut-pos{font-weight:700; font-size:clamp(9px, 2.8vw, 12px); letter-spacing:.04em;}
+.fut-flag{font-size:clamp(10px, 3vw, 14px); margin-top:3px;}
+.fut-fav{font-size:10px; margin-top:2px;}
+.fut-face{width:62%; margin-left:18%; margin-top:2%; z-index:1;}
+.fut-avatar{width:100%; height:auto; display:block; filter:drop-shadow(0 4px 4px rgba(0,0,0,0.25));}
+.fut-name{z-index:2; width:100%; text-align:center; font-weight:700; font-size:clamp(10px, 3.3vw, 14px); text-transform:uppercase; letter-spacing:.02em;
+  border-bottom:1px solid var(--line); padding-bottom:2px; margin-top:-2%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.fut-stats{z-index:2; display:grid; grid-template-columns:1fr 1fr; gap:0 10%; width:84%; margin-top:3%; font-size:clamp(8.5px, 2.6vw, 11.5px);}
+.fut-stats div{display:flex; gap:4px; align-items:baseline; justify-content:flex-start;}
+.fut-stats b{font-weight:700; min-width:1.6em; text-align:right;}
+.fut-stats span{opacity:.75; font-weight:600;}
+.fut-tier{position:absolute; bottom:5%; left:0; right:0; text-align:center; font-size:clamp(6.5px, 2vw, 9px); letter-spacing:.2em; font-weight:700; opacity:.65; z-index:2;}
+.fut-status{position:absolute; top:44%; left:-10%; right:-10%; transform:rotate(-14deg); text-align:center; z-index:3; font-weight:700;
+  letter-spacing:.2em; font-size:clamp(9px, 2.8vw, 12px); padding:2px 0; color:#fff;}
+.fut-status.ban{background:rgba(200,16,46,0.88);} .fut-status.inj{background:rgba(255,140,0,0.88);}
+.fut-bronze{--c1:#e0aa76; --c2:#8a5a2e; --ink:#2a1606; --line:rgba(42,22,6,0.3);}
+.fut-argent{--c1:#f2f4f7; --c2:#9aa3ad; --ink:#1e2329; --line:rgba(30,35,41,0.25);}
+.fut-or{--c1:#fbe9a0; --c2:#c99a2e; --ink:#2b2104;}
+.fut-special{--c1:#2a2a2a; --c2:#0b0b0b; --ink:#f3d27a; --line:rgba(243,210,122,0.4);
+  background:radial-gradient(ellipse 80% 50% at 50% 28%, rgba(243,210,122,0.25), transparent 65%), linear-gradient(160deg,#2b2b2b,#070707);}
+.fut-legend{--c1:#fffaf0; --c2:#e6cf94; --ink:#3a2a06; --line:rgba(58,42,6,0.3); box-shadow:0 0 18px rgba(255,214,120,0.6), 0 10px 22px rgba(0,0,0,0.45);}
+.fut-elite{--c1:#7d2fd0; --c2:#2a0b52; --ink:#ffd6ff; --line:rgba(255,214,255,0.35); box-shadow:0 0 18px rgba(165,87,224,0.7), 0 10px 22px rgba(0,0,0,0.45);}
+.fut-icone{--c1:#fff6dc; --c2:#cfae62; --ink:#3a2700; --line:rgba(58,39,0,0.35); box-shadow:0 0 24px rgba(255,220,130,0.85), 0 10px 22px rgba(0,0,0,0.45);}
+.fut-doped::after{content:'💉'; position:absolute; top:12%; right:10%; font-size:12px; z-index:3;}
+.fut-hero{display:flex; justify-content:center; margin:0 0 14px;}
+.fut-card.fut-big{width:min(58vw, 220px); cursor:default; animation:futIn .5s cubic-bezier(.2,1.3,.4,1);}
+.fut-big .fut-ovr{font-size:46px;} .fut-big .fut-pos{font-size:17px;} .fut-big .fut-flag{font-size:20px;}
+.fut-big .fut-name{font-size:21px;} .fut-big .fut-stats{font-size:15px;} .fut-big .fut-tier{font-size:11px;} .fut-big .fut-status{font-size:16px;}
+@keyframes futIn{from{transform:rotateY(80deg) scale(.8); opacity:0;} to{transform:none; opacity:1;}}
+/* Carte du buteur pendant le match */
+.goal-card-pop{position:absolute; right:10px; top:50%; z-index:12; width:110px; transform:translate(140%,-50%); transition:transform .5s cubic-bezier(.2,1.3,.4,1); pointer-events:none;}
+.goal-card-pop.in{transform:translate(0,-50%);}
+.goal-card-pop .fut-card{width:100%; cursor:default;}
+.goal-card-pop .gcp-lab{text-align:center; font-family:'Bebas Neue',sans-serif; font-size:20px; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,0.8); letter-spacing:.06em;}
+.pitch-wrap.mode3d > .goal-card-pop{display:block !important;}
+.s3d-replay{position:absolute; left:50%; top:10px; transform:translateX(-50%); display:none; align-items:center; gap:10px; pointer-events:auto;
+  background:rgba(0,0,0,0.75); border:1px solid rgba(255,255,255,0.25); border-radius:20px; padding:4px 6px 4px 14px; color:#fff;
+  font-family:'Bebas Neue',sans-serif; font-size:18px; letter-spacing:.12em; z-index:8;}
+.s3d-replaying .s3d-replay{display:flex;}
+.s3d-replaying .s3d-bug, .s3d-replaying .s3d-tools, .s3d-replaying .s3d-live, .s3d-replaying .s3d-ticker, .s3d-replaying .s3d-carrier{opacity:0; pointer-events:none;}
+.s3d-replaying::before, .s3d-replaying::after{content:''; display:block !important; position:absolute; left:0; right:0; height:9%; background:#000; z-index:5;}
+.s3d-replaying::before{top:0;} .s3d-replaying::after{bottom:0; top:auto; width:auto; margin:0; border:none; border-radius:0;}
 </style>
 </head>
 <body>
@@ -4421,6 +4502,73 @@ function trendArrow(p){
 
 let squadFilterQuery = "";
 let squadFilterMaxOnly = false;
+
+/* ---------------- v47 : CARTES JOUEURS FAÇON "ULTIMATE TEAM" ----------------
+   futRatings(p) dérive une NOTE globale et 6 statistiques d'affichage (VIT/TIR/PAS/DRI/DEF/PHY, ou
+   PLO/JMA/DÉG/RÉF/VIT/PLA pour un gardien) des vraies valeurs du jeu (attaque, défense, endurance,
+   forme) + une petite variation stable propre à chaque joueur (graine = id). Purement visuel :
+   aucune influence sur la simulation. futCardHTML(p, opts) rend la carte (rareté selon la note
+   et les paliers special/legend/elite/icone). */
+function futSeed(p){ let h = 2166136261; const k = String(p.id||p.nom); for(let i=0;i<k.length;i++){ h ^= k.charCodeAt(i); h = Math.imul(h,16777619); } return h>>>0; }
+function futRatings(p){
+  const sd = futSeed(p), v = (n)=> (((sd >>> (n*3)) & 15) - 7);      // variation -7..+8, stable
+  const A = p.attaque, D = p.defense, E = p.endurance || 65, F = p.forme || 75;
+  const c = (x)=> Math.max(15, Math.round(x));
+  let ovr;
+  if(p.pos==="GB") ovr = D*0.92 + A*0.08;
+  else if(p.pos==="DEF") ovr = D*0.78 + A*0.22;
+  else if(p.pos==="MIL") ovr = A*0.55 + D*0.45;
+  else ovr = A*0.82 + D*0.18;
+  ovr = c(ovr + (F-75)*0.06);
+  const stats = p.pos==="GB"
+    ? [["PLO", c(D*0.98+v(0))], ["JMA", c(D*0.9+v(1))], ["DÉG", c(D*0.72+A*0.2+v(2))], ["RÉF", c(D*1.02+v(3))], ["VIT", c(E*0.5+D*0.2+v(4))], ["PLA", c(D*0.95+v(5))]]
+    : [["VIT", c(A*0.55+E*0.4+v(0)+(p.pos==="ATT"?6:0))], ["TIR", c(A*(p.pos==="DEF"?0.7:1)+v(1))], ["PAS", c((A+D)/2 + (p.pos==="MIL"?8:0)+v(2))],
+       ["DRI", c(A*0.95+(p.pos==="DEF"?-8:2)+v(3))], ["DEF", c(D*(p.pos==="ATT"?0.75:1)+v(4))], ["PHY", c(D*0.45+E*0.45+8+v(5))]];
+  return {ovr, stats};
+}
+function futTier(p, ovr){
+  if(p.icone) return "icone"; if(p.elite) return "elite"; if(p.legend) return "legend"; if(p.special) return "special";
+  return ovr >= 75 ? "or" : ovr >= 65 ? "argent" : "bronze";
+}
+const FUT_TIER_LABEL = {icone:"ICÔNE", elite:"ÉLITE", legend:"LÉGENDE", special:"SPÉCIAL", or:"OR", argent:"ARGENT", bronze:"BRONZE"};
+function futAvatarSVG(p){
+  const sd = futSeed(p);
+  const skins = ["#f1c7a5","#e0a982","#c68863","#9a6643","#6e4529","#4b2e1c"], hairs = ["#16100c","#2b1a0f","#5a3b22","#b88a4a","#0d0d0d","#3b2a1a"];
+  const skin = skins[sd % skins.length], hair = hairs[(sd>>>3) % hairs.length], style = (sd>>>6) % 4;
+  const shirt = p.pos==="GB" ? "#1f9d55" : "#1b2f6b";
+  const hairPath = style===0 ? "M30 40 Q30 18 50 17 Q70 18 70 40 Q66 28 50 27 Q34 28 30 40Z"
+    : style===1 ? "M29 44 Q27 15 50 14 Q73 15 71 44 Q70 30 50 26 Q30 30 29 44Z"
+    : style===2 ? "M31 37 Q33 22 50 21 Q67 22 69 37 Q60 31 50 31 Q40 31 31 37Z"
+    : "M28 46 Q24 12 50 11 Q76 12 72 46 Q74 26 50 22 Q26 26 28 46Z";
+  return `<svg viewBox="0 0 100 100" class="fut-avatar" aria-hidden="true">
+    <path d="M14 100 Q16 74 36 68 L64 68 Q84 74 86 100Z" fill="${shirt}"/>
+    <path d="M40 68 L50 80 L60 68" fill="none" stroke="#fff" stroke-width="3"/>
+    <rect x="43" y="56" width="14" height="14" rx="5" fill="${skin}"/>
+    <ellipse cx="50" cy="42" rx="19" ry="22" fill="${skin}"/>
+    <path d="${hairPath}" fill="${hair}"/>
+    <ellipse cx="43" cy="44" rx="2.2" ry="2.6" fill="#1a1a1a" opacity=".75"/><ellipse cx="57" cy="44" rx="2.2" ry="2.6" fill="#1a1a1a" opacity=".75"/>
+    <path d="M44 54 Q50 57 56 54" fill="none" stroke="#5a2e22" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
+  </svg>`;
+}
+function futCardHTML(p, opts){
+  opts = opts || {};
+  const {ovr, stats} = futRatings(p);
+  const tier = futTier(p, ovr);
+  const last = String(p.nom||"").split(" ").slice(-1)[0];
+  const flag = opts.flag || "🇫🇷";
+  const status = p.banned ? `<div class="fut-status ban">BANNI</div>` : (p.indispo>0 ? `<div class="fut-status inj">BLESSÉ</div>` : "");
+  return `<div class="fut-card fut-${tier} ${opts.big?'fut-big':''} ${p.doped?'fut-doped':''}" ${opts.id!==false ? `data-id="${p.id}"` : ""}>
+    <div class="fut-shine"></div>
+    <div class="fut-top"><div class="fut-ovr">${ovr}</div><div class="fut-pos">${p.pos}</div><div class="fut-flag">${flag}</div>${p.favorite?'<div class="fut-fav">⭐</div>':''}</div>
+    <div class="fut-face">${futAvatarSVG(p)}</div>
+    <div class="fut-name">${last}</div>
+    <div class="fut-stats">${stats.map(([k,val])=>`<div><b>${val}</b><span>${k}</span></div>`).join("")}</div>
+    <div class="fut-tier">${FUT_TIER_LABEL[tier]}${state.captainId===p.id?' · C':''}</div>
+    ${status}
+  </div>`;
+}
+function squadViewPref(){ try{ return localStorage.getItem("sel-squadview") || "cartes"; }catch(e){ return "cartes"; } }
+
 function renderEffectif(el){
   const order = {GB:0,DEF:1,MIL:2,ATT:3};
   const squad = [...state.squad].sort((a,b)=> (b.favorite?1:0)-(a.favorite?1:0) || order[a.pos]-order[b.pos] || overall(b)-overall(a));
@@ -4433,6 +4581,10 @@ function renderEffectif(el){
     <div class="formation-note">👑 <b style="color:var(--gold);">${maxCount}</b>/${state.squad.length} joueur(s) au potentiel maximum.</div>
     <input type="text" class="search-input" id="squadSearch" placeholder="🔎 Rechercher un joueur (nom ou poste : GB, DEF, MIL, ATT)" value="${squadFilterQuery.replace(/"/g,'&quot;')}">
     <label class="toggle-row"><input type="checkbox" id="maxOnlyToggle" ${squadFilterMaxOnly?'checked':''}> Afficher seulement les joueurs au potentiel maximum</label>
+    <div class="subnav" id="squadViewToggle" style="margin:4px 0 12px;">
+      <button class="subnav-btn ${squadViewPref()==='cartes'?'active':''}" data-sv="cartes">🃏 Cartes</button>
+      <button class="subnav-btn ${squadViewPref()==='liste'?'active':''}" data-sv="liste">📋 Liste</button>
+    </div>
     <div class="effectif-actions">
       <button class="btn-soin" id="restBtn" ${state.restUsedToday?'disabled':''}>
         ${state.restUsedToday ? "😴 Repos accordé" : "😴 Repos collectif"}
@@ -4456,11 +4608,19 @@ function renderEffectif(el){
   const searchInput = el.querySelector("#squadSearch");
   searchInput.oninput = ()=>{ squadFilterQuery = searchInput.value; renderSquadCards(); };
   el.querySelector("#maxOnlyToggle").onchange = (e)=>{ squadFilterMaxOnly = e.target.checked; renderSquadCards(); };
+  el.querySelectorAll("#squadViewToggle [data-sv]").forEach(b=> b.onclick = ()=>{ try{ localStorage.setItem("sel-squadview", b.dataset.sv); }catch(e){} render(); });
   function renderSquadCards(){
     const q = squadFilterQuery.trim().toLowerCase();
     let filtered = !q ? squad : squad.filter(p=> p.nom.toLowerCase().includes(q) || p.pos.toLowerCase()===q);
     if(squadFilterMaxOnly) filtered = filtered.filter(isMaxed);
     const cards = el.querySelector("#cards");
+    if(squadViewPref()==="cartes" && filtered.length){
+      cards.className = "fut-grid";
+      cards.innerHTML = filtered.map(p=> futCardHTML(p)).join("");
+      cards.querySelectorAll(".fut-card").forEach(c=> c.onclick = ()=> openPlayerSheet(c.dataset.id));
+      return;
+    }
+    cards.className = "";
     cards.innerHTML = filtered.length ? filtered.map(p=>{
       const maxed = isMaxed(p);
       const auraCls = tierAuraClass(p);
@@ -5440,7 +5600,7 @@ function openPlayerSheet(id, msg, tab){
   const bodyHtml = tab==="stats" ? renderPlayerTabStats(p)
     : tab==="carriere" ? renderPlayerTabCarriere(p)
     : tab==="actions" ? renderPlayerTabActions(p)
-    : renderPlayerTabApercu(p);
+    : `<div class="fut-hero">${futCardHTML(p, {big:true, id:false})}</div>` + renderPlayerTabApercu(p);
   overlay.innerHTML = `
     <div class="sheet ps-sheet">
       ${renderPlayerSheetHeader(p, state.captainId===p.id ? "C" : null)}
@@ -6425,6 +6585,7 @@ function stopAmbientMotion(m){
 function flashResult(m, side, idx){
   if(!isLiveScreenActive(m)) return;
   if(window.Stade3D) Stade3D.onGoal(m, side, idx);
+  if(side==="us") showGoalCard(m, idx);
   SFX.crowdBurst(side==="us", side==="us");
   const gf = document.getElementById("goalFlash");
   if(gf){ gf.classList.remove("show"); void gf.offsetWidth; gf.classList.add("show"); setTimeout(()=> gf.classList.remove("show"), 900); }
@@ -6439,6 +6600,20 @@ function flashResult(m, side, idx){
   }
 }
 
+// v47 : carte "Ultimate Team" du buteur qui glisse sur le terrain après un but des nôtres
+function showGoalCard(m, idx){
+  const p = m.usOrder && m.usOrder[idx];
+  const wrap = document.getElementById("pitchWrap");
+  if(!p || !wrap) return;
+  const old = wrap.querySelector(".goal-card-pop"); if(old) old.remove();
+  const d = document.createElement("div");
+  d.className = "goal-card-pop";
+  d.innerHTML = `<div class="gcp-lab">⚽ BUT !</div>${futCardHTML(p, {id:false, flag: m.ctx==="club" ? "🏙️" : "🇫🇷"})}`;
+  wrap.appendChild(d);
+  setTimeout(()=> d.classList.add("in"), 1200);
+  setTimeout(()=> d.classList.remove("in"), 5200);
+  setTimeout(()=> d.remove(), 5900);
+}
 function spawnConfetti(wrap){
   const colors = ["#d4af37","#f4f7f5","#5fb87a","#4c86c4"];
   for(let i=0;i<16;i++){
@@ -6705,7 +6880,8 @@ async function playSequence(m, side, outcome){
   if(wide && arr[assistIdx]) arr[assistIdx].x = clamp(goalX - dir*rand(6,14), 5, 95);
   m.pos.ball.x = arr[shooterIdx].x; m.pos.ball.y = arr[shooterIdx].y;
   countPass(m, side);
-  s3dAction(m, {kind:"pass", side, from:assistIdx, to:shooterIdx, type: wide ? "centre" : "avant"});
+  const isHeader = wide && Math.random() < 0.55;    // v47 : reprise de la tête sur centre
+  s3dAction(m, {kind:"pass", side, from:assistIdx, to:shooterIdx, type: wide ? "centre" : "avant", header:isHeader});
   applyFrame(m);
   pushEntry(m, {min:m.minute, goal:false, text: wide
     ? pick([`Centre de ${nameOf(assistIdx)} vers ${nameOf(shooterIdx)}…`, `${nameOf(assistIdx)} déborde et centre pour ${nameOf(shooterIdx)} !`])
@@ -6713,7 +6889,7 @@ async function playSequence(m, side, outcome){
   await mDelay(950);
 
   m.pos.ball.x = goalX; m.pos.ball.y = lane;
-  s3dAction(m, {kind:"shot", side, who:shooterIdx, outcome});
+  s3dAction(m, {kind:"shot", side, who:shooterIdx, outcome, header:isHeader});
   // après la frappe : le gardien adverse (arrêt, sortie de but) ou un coup d'envoi (but)
   if(outcome === "goal") m.lastHolder = null;
   else if(outcome === "corner" || outcome === "post") setHolder(m, side, shooterIdx);
@@ -6730,7 +6906,7 @@ async function playSequence(m, side, outcome){
       if(scorer) scorer.buts = (scorer.buts||0) + 1;
     } else m.them++;
     pushEntry(m, {min:m.minute, goal:true, text: ours
-      ? `⚽ BUT ! ${nameOf(shooterIdx)} conclut d'un tir précis ! (passe décisive : ${nameOf(assistIdx)})`
+      ? `⚽ BUT ! ${nameOf(shooterIdx)} ${isHeader ? "place une tête imparable" : "conclut d'un tir précis"} ! (passe décisive : ${nameOf(assistIdx)})`
       : `⚽ But encaissé — ${nameOf(shooterIdx)} (${m.opp}) punit la défense française, sur un service de ${nameOf(assistIdx)}.`});
     flashResult(m, side, shooterIdx);
     await mDelay(1600);
@@ -6765,7 +6941,7 @@ async function playSequence(m, side, outcome){
     m.pos.ball.y = 50;
     applyFrame(m);
     pushEntry(m, {min:m.minute, goal:false, text: ours
-      ? `Tir de ${nameOf(shooterIdx)}, repoussé par ${playerNameAt(m,"them",0)} !`
+      ? `${isHeader ? "Tête" : "Tir"} de ${nameOf(shooterIdx)}, repoussé${isHeader ? "e" : ""} par ${playerNameAt(m,"them",0)} !`
       : `Frappe de ${nameOf(shooterIdx)} captée par ${playerNameAt(m,"us",0)}.`});
   } else if(outcome === "corner"){
     if(ours) st.corUs++; else st.corThem++;
