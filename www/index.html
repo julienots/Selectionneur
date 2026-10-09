@@ -643,6 +643,38 @@ puis le chargement du jeu". [FAIT] :
   enchaîner directement sur le logo du studio sans "flash" d'une autre image.
 ATTENTION si vous reprenez ce chantier : la séquence dure ~6 s à chaque lancement ; si Julien la
 trouve trop longue, raccourcir les `wait(2900)` / `delay(...)` de runBootSequence().
+
+v44 — Demande de Julien : "refonte ultra du jeu, ultra beau en 3D 2D 2.5D, rends encore plus
+réalistes les matchs, longs réellement, de vraies passes de match, des identités réelles de
+joueurs". [FAIT] :
+- MOTEUR DE MATCH (bloc "v44 : MATCH RÉALISTE" juste avant playSequence) :
+  * tickMatch avance désormais minute par minute (+1 au lieu de +5) ; les probabilités historiques
+    (calibrées pour 5 min) sont multipliées par PER_MIN=0.2 en temps réglementaire (1 en prolongation,
+    inchangée) => même équilibre/score moyen sur 90 min. Mi-temps déclenchée à 45' (avant : >=42).
+  * Vraies séquences de passes : playPassChain(m, side, holder, n, prFrom, prTo, talk) choisit chaque
+    receveur selon sa ligne et la progression du ballon, déplace receveur + ballon, compte les passes
+    (m.stats.passUs/passThem, affichées dans #miniStats) et commente ("X trouve Y entre les lignes").
+  * playSequence : construction de 2 à 5 passes, puis centre / passe en profondeur vers le tireur,
+    puis frappe ; issue (but, arrêt, poteau...) et statistiques STRICTEMENT inchangées. Passe
+    décisive citée dans le texte du but. Les minutes sans occasion jouent playPossessionMinute()
+    (circulation + interceptions) à la place de l'ancien playMidfield() (conservé, plus appelé).
+  * Bloc d'équipe qui monte/descend avec le ballon : m.shiftUs / m.shiftThem (setTeamShift) ajoutés
+    à la position de base dans applyFrame().
+  * Rythme réglable "Rapide / Normal / Réaliste" (MATCH_PACES, localStorage "sel-matchpace", bouton
+    #paceBtn sous le terrain + bouton dans le HUD 3D) appliqué par mDelay() à toutes les pauses
+    du match (≈1,5 / 3,5 / 6,5 min par match). Possession lissée en flottant (m.stats._pf).
+- IDENTITÉS RÉELLES : OPP_ROSTERS = XI réels des 30 sélections de WORLD_TEAMS (ordre OPP_POS : GB,
+  4 DEF, 4 MIL, 2 ATT). oppNamesFor(m) mémorise m.oppNames sur l'objet match ; les adversaires de
+  club ("FC Milan"...) reçoivent un effectif crédible généré selon la ville (CLUB_NAME_POOLS,
+  graine = nom du club). Tous les commentaires (passes, buts, arrêts du gardien, fautes, cartons)
+  nomment les joueurs. Avant-match : carte "Composition probable" (renderOppLineupCard).
+- 3D (stade3d.js) : NOM + numéro au dos de chaque maillot (makeNumberTexture), mains, nouvelle
+  caméra "Tactique" (vue 2.5D haute et inclinée), bandeau du dernier commentaire en direct
+  (.s3d-ticker), nom réel du porteur adverse dans le HUD.
+- 2D : terrain du mode 2D en perspective 2.5D (pions debout), cartes joueurs à reflet animé.
+ATTENTION si vous reprenez ce chantier : l'effectif FRANÇAIS de départ reste majoritairement généré
+(REAL_INJECT_CAP volontairement bas depuis une version précédente, pour l'équilibrage). Les rosters
+réels sont figés à l'automne 2026 : à mettre à jour à la main dans OPP_ROSTERS si besoin.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1456,6 +1488,43 @@ body{background:
 .boot-credit b{color:#fff; letter-spacing:.04em; text-transform:none; font-size:13px;}
 .boot-credit b span{color:#fcca1e;}
 @media (prefers-reduced-motion: reduce){ #boot *{animation-duration:.01s !important; animation-delay:0s !important;} }
+.live-actions{display:flex; gap:8px; margin-top:10px;}
+.live-actions .btn{margin-top:0;}
+.live-actions #subsBtn{flex:1.6;} .live-actions #paceBtn{flex:1;}
+.s3d-ticker{position:absolute; left:8px; right:8px; bottom:40px; display:flex; align-items:center; gap:8px;
+  background:linear-gradient(90deg, rgba(8,14,34,0.92), rgba(8,14,34,0.72)); border-left:3px solid #4c86c4;
+  border-radius:0 6px 6px 0; padding:5px 10px; color:#eef2fa; font-family:'Barlow',sans-serif; font-size:12.5px; line-height:1.25;
+  opacity:0; transform:translateY(6px); transition:opacity .25s ease, transform .25s ease; max-height:3.2em; overflow:hidden;}
+.s3d-ticker.in{opacity:1; transform:none;}
+.s3d-ticker.goal{border-left-color:var(--gold); background:linear-gradient(90deg, rgba(60,46,6,0.95), rgba(20,16,4,0.8)); font-weight:700;}
+.s3d-tmin{font-family:'Bebas Neue',sans-serif; font-size:16px; color:var(--gold); flex-shrink:0;}
+.pitch-wrap.s3d-fullscreen .s3d-ticker{bottom:calc(52px + env(safe-area-inset-bottom)); left:12px; right:12px; font-size:14px;}
+
+/* ---- v44 : feuille de match adverse ---- */
+.opp-lineup{background:linear-gradient(135deg, rgba(193,18,31,0.14), rgba(255,255,255,0.03) 60%); border:1px solid rgba(255,255,255,0.1);
+  border-radius:14px; padding:10px 12px; margin:0 0 14px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 18px rgba(0,0,0,0.3);}
+.opp-lineup-head{display:flex; justify-content:space-between; align-items:center; font-family:'Barlow Condensed'; text-transform:uppercase;
+  letter-spacing:.08em; font-size:12px; color:var(--chalk); margin-bottom:6px;}
+.opp-lineup-head b{color:#fff; font-size:14px; letter-spacing:.04em;}
+.opp-line{display:flex; gap:8px; align-items:flex-start; padding:4px 0; border-top:1px solid rgba(255,255,255,0.06);}
+.opp-pos{width:30px; flex-shrink:0; font-family:'Barlow Condensed'; font-weight:700; font-size:11px; color:var(--gold); padding-top:2px;}
+.opp-names{display:flex; flex-wrap:wrap; gap:4px 10px; font-size:12.5px; color:#e8ecf5;}
+
+/* ---- v44 : terrain 2D en perspective 2.5D (vue "tribune"), pions debout face caméra ---- */
+.pitch-wrap:not(.mode3d){transform:perspective(720px) rotateX(30deg) scale(0.97); transform-origin:50% 75%; margin-top:-34px;
+  box-shadow:0 30px 40px -18px rgba(0,0,0,0.7);}
+.pitch-wrap:not(.mode3d) .dot{transform:translate(-50%,-85%) rotateX(-30deg); transform-origin:50% 100%;}
+.pitch-wrap:not(.mode3d) .goal-flash{transform:rotateX(-30deg);}
+.pitch-wrap:not(.mode3d) .goal-l, .pitch-wrap:not(.mode3d) .goal-r{box-shadow:0 -6px 0 rgba(255,255,255,0.35);}
+
+/* ---- v44 : cartes joueurs façon "cartes à collectionner" ---- */
+.player-card{position:relative; overflow:hidden;}
+.player-card::after{content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
+  background:linear-gradient(115deg, transparent 35%, rgba(255,255,255,0.07) 45%, transparent 55%); background-size:250% 100%;
+  animation:cardSheen 6s ease-in-out infinite;}
+.player-card.special::after{background:linear-gradient(115deg, transparent 35%, rgba(255,228,140,0.22) 45%, transparent 55%); background-size:250% 100%;}
+@keyframes cardSheen{0%,70%{background-position:120% 0;} 100%{background-position:-120% 0;}}
+.pos-badge{border-radius:10px 10px 10px 3px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 8px rgba(0,0,0,0.35);}
 </style>
 </head>
 <body>
@@ -5423,6 +5492,7 @@ function renderMatchTab(el){
     <div class="eyebrow">${typeLabel(next.type, next)}</div>
     <h2 class="section-title">France 🇫🇷 vs ${next.opp}</h2>
     <div class="s3d-hero" id="s3dHero"></div>
+    ${renderOppLineupCard(next)}
     ${renderSeriesTrack(next)}
     ${(state.staff.analyste>0) ? `<div class="news-item"><span class="news-tag">📊 Rapport de l'analyste vidéo</span><div class="news-title">${oppTierLabel(next.type)} — préparez votre tactique en conséquence.</div></div>` : ""}
     <div class="tactic-bar" id="openTactics">
@@ -6053,12 +6123,12 @@ function pushEntry(m, entry){
 function applyFrame(m){
   m.pos.us.forEach((p,i)=>{
     const base = m.formPos[i];
-    p.x = clamp(0.82*p.x + 0.18*base.x + rand(-2,2), 3, 97);
+    p.x = clamp(0.82*p.x + 0.18*(base.x + (m.shiftUs||0)) + rand(-1.5,1.5), 3, 97);
     p.y = clamp(0.82*p.y + 0.18*base.y + rand(-2,2), 5, 95);
   });
   m.pos.them.forEach((p,i)=>{
     const base = OPP_POS[i];
-    p.x = clamp(0.82*p.x + 0.18*base.x + rand(-2,2), 3, 97);
+    p.x = clamp(0.82*p.x + 0.18*(base.x + (m.shiftThem||0)) + rand(-1.5,1.5), 3, 97);
     p.y = clamp(0.82*p.y + 0.18*base.y + rand(-2,2), 5, 95);
   });
   if(isLiveScreenActive(m)) placeAllDots(m);
@@ -6110,6 +6180,174 @@ function spawnConfetti(wrap){
   }
 }
 
+/* ---------------- v44 : MATCH RÉALISTE — rythme, vrais effectifs adverses, vraies séquences de passes ----------------
+   - Le match avance désormais MINUTE PAR MINUTE (plus par tranches de 5) ; les probabilités d'occasion/faute/blessure
+     de tickMatch() sont ramenées à la minute (facteur PER_MIN) pour garder le même équilibre sur 90 minutes.
+   - Chaque action est une vraie séquence de passes entre joueurs NOMMÉS (playPassChain), avec déplacement en bloc des
+     deux équipes (m.shiftUs / m.shiftThem lus par applyFrame) : le moteur 3D anime ces passes une à une.
+   - Rythme réglable (Rapide / Normal / Réaliste) : préférence localStorage "sel-matchpace", appliquée par mDelay().
+   - Effectifs adverses réels (OPP_ROSTERS, ordre = OPP_POS : GB, 4 DEF, 4 MIL, 2 ATT) ; clubs : noms générés selon la ville. */
+const MATCH_PACES = {
+  rapide:  {label:"⏩ Rapide",   f:0.45},
+  normal:  {label:"▶ Normal",    f:1},
+  reel:    {label:"🎬 Réaliste", f:1.9},
+};
+function matchPaceKey(){ try{ const k = localStorage.getItem("sel-matchpace"); return MATCH_PACES[k] ? k : "normal"; }catch(e){ return "normal"; } }
+function cycleMatchPace(){
+  const keys = Object.keys(MATCH_PACES);
+  const k = keys[(keys.indexOf(matchPaceKey())+1) % keys.length];
+  try{ localStorage.setItem("sel-matchpace", k); }catch(e){}
+  document.querySelectorAll("[data-pace-label]").forEach(el=> el.textContent = MATCH_PACES[k].label);
+}
+function mDelay(ms){ return delay(ms * MATCH_PACES[matchPaceKey()].f); }
+
+const OPP_ROSTERS = {
+  "Norvège":["Ørjan Nyland","Julian Ryerson","Kristoffer Ajer","Leo Østigård","David Møller Wolfe","Martin Ødegaard","Sander Berge","Fredrik Aursnes","Antonio Nusa","Erling Haaland","Alexander Sørloth"],
+  "Portugal":["Diogo Costa","João Cancelo","Rúben Dias","António Silva","Nuno Mendes","Bruno Fernandes","Vitinha","João Neves","Bernardo Silva","Cristiano Ronaldo","Rafael Leão"],
+  "Écosse":["Angus Gunn","Aaron Hickey","Grant Hanley","Scott McKenna","Andrew Robertson","Scott McTominay","Billy Gilmour","John McGinn","Ryan Christie","Che Adams","Lyndon Dykes"],
+  "Brésil":["Alisson","Wesley","Marquinhos","Gabriel Magalhães","Alex Sandro","Casemiro","Bruno Guimarães","Raphinha","Estêvão","Vinícius Júnior","Matheus Cunha"],
+  "Sénégal":["Édouard Mendy","Krépin Diatta","Kalidou Koulibaly","Moussa Niakhaté","Ismail Jakobs","Idrissa Gana Gueye","Pape Matar Sarr","Lamine Camara","Ismaïla Sarr","Sadio Mané","Nicolas Jackson"],
+  "Japon":["Zion Suzuki","Yukinari Sugawara","Ko Itakura","Takehiro Tomiyasu","Hiroki Ito","Wataru Endo","Hidemasa Morita","Takefusa Kubo","Kaoru Mitoma","Ritsu Doan","Ayase Ueda"],
+  "Croatie":["Dominik Livaković","Josip Stanišić","Joško Gvardiol","Josip Šutalo","Borna Sosa","Luka Modrić","Mateo Kovačić","Martin Baturina","Lovro Majer","Andrej Kramarić","Ante Budimir"],
+  "Maroc":["Yassine Bounou","Achraf Hakimi","Nayef Aguerd","Romain Saïss","Noussair Mazraoui","Sofyan Amrabat","Azzedine Ounahi","Bilal El Khannouss","Brahim Díaz","Abde Ezzalzouli","Youssef En-Nesyri"],
+  "Argentine":["Emiliano Martínez","Nahuel Molina","Cristian Romero","Lisandro Martínez","Nicolás Tagliafico","Rodrigo De Paul","Enzo Fernández","Alexis Mac Allister","Nico González","Lionel Messi","Julián Álvarez"],
+  "Allemagne":["Marc-André ter Stegen","Joshua Kimmich","Antonio Rüdiger","Jonathan Tah","David Raum","Aleksandar Pavlović","Leon Goretzka","Jamal Musiala","Florian Wirtz","Kai Havertz","Nick Woltemade"],
+  "Angleterre":["Jordan Pickford","Reece James","John Stones","Marc Guéhi","Myles Lewis-Skelly","Declan Rice","Jude Bellingham","Bukayo Saka","Cole Palmer","Harry Kane","Anthony Gordon"],
+  "Espagne":["Unai Simón","Dani Carvajal","Dean Huijsen","Aymeric Laporte","Marc Cucurella","Rodri","Pedri","Fabián Ruiz","Nico Williams","Lamine Yamal","Mikel Oyarzabal"],
+  "Pays-Bas":["Bart Verbruggen","Denzel Dumfries","Virgil van Dijk","Micky van de Ven","Nathan Aké","Frenkie de Jong","Tijjani Reijnders","Ryan Gravenberch","Xavi Simons","Cody Gakpo","Memphis Depay"],
+  "Italie":["Gianluigi Donnarumma","Giovanni Di Lorenzo","Alessandro Bastoni","Riccardo Calafiori","Federico Dimarco","Nicolò Barella","Sandro Tonali","Davide Frattesi","Lorenzo Pellegrini","Moise Kean","Mateo Retegui"],
+  "Belgique":["Thibaut Courtois","Timothy Castagne","Wout Faes","Arthur Theate","Maxim De Cuyper","Amadou Onana","Youri Tielemans","Kevin De Bruyne","Jérémy Doku","Leandro Trossard","Romelu Lukaku"],
+  "Uruguay":["Sergio Rochet","Nahitan Nández","Ronald Araújo","José María Giménez","Mathías Olivera","Manuel Ugarte","Rodrigo Bentancur","Federico Valverde","Facundo Pellistri","Darwin Núñez","Maximiliano Araújo"],
+  "Nigéria":["Stanley Nwabali","Ola Aina","William Troost-Ekong","Calvin Bassey","Bright Osayi-Samuel","Wilfred Ndidi","Frank Onyeka","Alex Iwobi","Ademola Lookman","Victor Osimhen","Victor Boniface"],
+  "Ghana":["Lawrence Ati-Zigi","Tariq Lamptey","Mohammed Salisu","Alexander Djiku","Gideon Mensah","Thomas Partey","Salis Abdul Samed","Mohammed Kudus","Kamaldeen Sulemana","Antoine Semenyo","Iñaki Williams"],
+  "Corée du Sud":["Jo Hyeon-woo","Seol Young-woo","Kim Min-jae","Kim Young-gwon","Lee Myung-jae","Hwang In-beom","Paik Seung-ho","Lee Kang-in","Lee Jae-sung","Son Heung-min","Oh Hyeon-gyu"],
+  "États-Unis":["Matt Turner","Sergiño Dest","Chris Richards","Tim Ream","Antonee Robinson","Tyler Adams","Weston McKennie","Gio Reyna","Christian Pulisic","Folarin Balogun","Timothy Weah"],
+  "Mexique":["Luis Malagón","Jorge Sánchez","César Montes","Johan Vásquez","Jesús Gallardo","Edson Álvarez","Luis Chávez","Orbelín Pineda","Hirving Lozano","Santiago Giménez","Raúl Jiménez"],
+  "Suisse":["Gregor Kobel","Silvan Widmer","Manuel Akanji","Nico Elvedi","Ricardo Rodríguez","Granit Xhaka","Remo Freuler","Denis Zakaria","Dan Ndoye","Breel Embolo","Rubén Vargas"],
+  "Pologne":["Łukasz Skorupski","Matty Cash","Jan Bednarek","Jakub Kiwior","Nicola Zalewski","Jakub Moder","Piotr Zieliński","Sebastian Szymański","Kacper Urbański","Robert Lewandowski","Krzysztof Piątek"],
+  "Danemark":["Kasper Schmeichel","Joachim Andersen","Andreas Christensen","Jannik Vestergaard","Victor Kristiansen","Pierre-Emile Højbjerg","Morten Hjulmand","Christian Eriksen","Mikkel Damsgaard","Rasmus Højlund","Jonas Wind"],
+  "Serbie":["Predrag Rajković","Strahinja Pavlović","Nikola Milenković","Miloš Veljković","Filip Kostić","Saša Lukić","Sergej Milinković-Savić","Lazar Samardžić","Andrija Živković","Dušan Vlahović","Aleksandar Mitrović"],
+  "Colombie":["Camilo Vargas","Daniel Muñoz","Davinson Sánchez","Jhon Lucumí","Johan Mojica","Jefferson Lerma","Richard Ríos","James Rodríguez","Jhon Arias","Luis Díaz","Jhon Córdoba"],
+  "Équateur":["Hernán Galíndez","Ángelo Preciado","Félix Torres","Willian Pacho","Piero Hincapié","Moisés Caicedo","Alan Franco","Kendry Páez","Gonzalo Plata","Enner Valencia","Kevin Rodríguez"],
+  "Canada":["Maxime Crépeau","Alistair Johnston","Moïse Bombito","Derek Cornelius","Alphonso Davies","Stephen Eustáquio","Ismaël Koné","Jonathan Osorio","Tajon Buchanan","Jonathan David","Cyle Larin"],
+  "Australie":["Mathew Ryan","Lewis Miller","Harry Souttar","Cameron Burgess","Aziz Behich","Jackson Irvine","Aiden O'Neill","Riley McGree","Martin Boyle","Mitchell Duke","Nestory Irankunda"],
+  "Égypte":["Mohamed El Shenawy","Mohamed Hany","Mohamed Abdelmonem","Ramy Rabia","Ahmed Fatouh","Hamdy Fathy","Mohamed Elneny","Emam Ashour","Trézéguet","Mohamed Salah","Omar Marmoush"],
+};
+// Adversaires de club ("FC Milan"...) : effectif fictif mais crédible, prénoms/noms selon la ville.
+const CLUB_NAME_POOLS = {
+  it:[["Lorenzo","Matteo","Alessandro","Davide","Simone","Federico","Andrea","Riccardo","Gianluca","Marco"],["Rossi","Bianchi","Esposito","Romano","Ricci","Marino","Greco","Bruno","Gallo","Conti","De Luca","Mancini"]],
+  de:[["Lukas","Jonas","Leon","Felix","Maximilian","Niklas","Tim","Julian","Moritz","Paul"],["Müller","Schmidt","Schneider","Fischer","Weber","Wagner","Becker","Hoffmann","Koch","Richter","Klein","Wolf"]],
+  pt:[["João","Diogo","Rúben","Tiago","Gonçalo","Rafael","Pedro","André","Bruno","Nuno"],["Silva","Santos","Ferreira","Pereira","Oliveira","Costa","Rodrigues","Martins","Sousa","Gomes","Lopes","Carvalho"]],
+  nl:[["Daan","Sem","Luuk","Bram","Jesse","Thijs","Ruben","Stijn","Lars","Milan"],["de Vries","Jansen","van Dijk","Bakker","Visser","Smit","Meijer","de Boer","Mulder","de Groot","Bos","Vos"]],
+  en:[["Jack","Callum","Ryan","Liam","Connor","Jamie","Lewis","Kieran","Scott","Harry"],["Smith","Taylor","Brown","Wilson","Campbell","Stewart","Murray","Robertson","Walker","Wright","Hughes","Reid"]],
+  es:[["Pablo","Álvaro","Sergio","Javier","Iker","Hugo","Adrián","Rubén","Marcos","Raúl"],["García","Navarro","Moreno","Romero","Torres","Gil","Serrano","Ruiz","Ortega","Molina","Castro","Vidal"]],
+  tr:[["Emre","Burak","Arda","Kerem","Cengiz","Hakan","Oğuz","Mert","Yusuf","Serdar"],["Yılmaz","Kaya","Demir","Çelik","Şahin","Aydın","Öztürk","Arslan","Doğan","Kılıç","Aslan","Koç"]],
+  bal:[["Luka","Marko","Nikola","Stefan","Ivan","Dario","Filip","Mateo","Lazar","Bojan"],["Petrović","Jovanović","Horvat","Kovačević","Babić","Marić","Novak","Ilić","Nikolić","Pavlović","Perić","Radić"]],
+  gr:[["Giorgos","Dimitris","Kostas","Nikos","Giannis","Christos","Panagiotis","Vasilis","Thanasis","Stelios"],["Papadopoulos","Georgiou","Nikolaou","Karagiannis","Vlachos","Pappas","Oikonomou","Makris","Antoniou","Dimitriou","Ioannou","Kostas"]],
+  est:[["Jakub","Tomáš","Oleksandr","Mykola","Kacper","Piotr","Ondřej","Andriy","Wojciech","Dominik"],["Novák","Kowalski","Shevchenko","Nowak","Svoboda","Bondarenko","Wiśniewski","Dvořák","Kovalenko","Lewicki","Černý","Tkachenko"]],
+  be:[["Arne","Jens","Wout","Thibault","Maxime","Lander","Senne","Robbe","Brecht","Cédric"],["Peeters","Janssens","Maes","Jacobs","Mertens","Willems","Claes","Goossens","Wouters","De Smet","Dubois","Lambert"]],
+};
+const CITY_POOL_KEY = {Milan:"it",Turin:"it",Naples:"it",Bergame:"it",Munich:"de",Porto:"pt",Lisbonne:"pt",Amsterdam:"nl",Rotterdam:"nl",
+  Liverpool:"en",Glasgow:"en",Séville:"es",Istanbul:"tr",Belgrade:"bal",Zagreb:"bal",Athènes:"gr",Prague:"est",Kiev:"est",Cracovie:"est",Bruges:"be"};
+function seededRng(seedStr){ let h=2166136261; for(let i=0;i<seedStr.length;i++){ h^=seedStr.charCodeAt(i); h=Math.imul(h,16777619); } return ()=>{ h=Math.imul(h^(h>>>15), 2246822507); h=Math.imul(h^(h>>>13), 3266489909); h^=h>>>16; return (h>>>0)/4294967296; }; }
+function oppNamesFor(m){
+  if(Array.isArray(m.oppNames) && m.oppNames.length===11) return m.oppNames;
+  if(OPP_ROSTERS[m.opp]){ m.oppNames = OPP_ROSTERS[m.opp].slice(); return m.oppNames; }
+  const city = String(m.opp||"").replace(/^FC\s+/,"");
+  const pool = CLUB_NAME_POOLS[CITY_POOL_KEY[city]] || [PRENOMS, NOMS];
+  const r = seededRng(String(m.opp));
+  const used = new Set();
+  m.oppNames = [];
+  while(m.oppNames.length<11){
+    const n = pool[0][Math.floor(r()*pool[0].length)] + " " + pool[1][Math.floor(r()*pool[1].length)];
+    if(!used.has(n)){ used.add(n); m.oppNames.push(n); }
+  }
+  return m.oppNames;
+}
+function playerNameAt(m, side, i){
+  if(side==="us"){ const p = m.usOrder && m.usOrder[i]; return p ? p.nom : "Un joueur"; }
+  return oppNamesFor(m)[i] || m.opp;
+}
+// Déplacement du bloc : pr = 0 (ballon chez nous, près de notre but) -> 1 (dans la surface adverse)
+function setTeamShift(m, side, pr){
+  const push = -4 + pr*18, drop = pr*9;
+  if(side==="us"){ m.shiftUs = push; m.shiftThem = drop; }
+  else { m.shiftThem = -push; m.shiftUs = -drop; }
+}
+function relaxTeamShift(m){ m.shiftUs = (m.shiftUs||0)*0.5; m.shiftThem = (m.shiftThem||0)*0.5; }
+function countPass(m, side){ if(!m.stats) return; if(side==="us") m.stats.passUs = (m.stats.passUs||0)+1; else m.stats.passThem = (m.stats.passThem||0)+1; }
+
+const PASS_LINES = {
+  courte:  ["{a} ➜ {b}, passe courte.", "{a} glisse le ballon à {b}.", "Remise de {a} pour {b}.", "{a} combine avec {b}."],
+  avant:   ["{a} trouve {b} entre les lignes !", "Passe verticale de {a} vers {b}.", "{a} casse une ligne et sert {b}."],
+  longue:  ["Long ballon de {a} pour {b}.", "{a} renverse le jeu vers {b} !", "Transversale de {a}, contrôlée par {b}."],
+  retrait: ["{a} temporise et ressort sur {b}.", "{a} repart de derrière avec {b}."],
+};
+
+// Joue n passes pour `side`, de la progression prFrom à prTo. Retourne l'index du dernier porteur.
+async function playPassChain(m, side, holder, n, prFrom, prTo, talk){
+  const ours = side==="us";
+  const arr = ours ? m.pos.us : m.pos.them;
+  const base = ours ? m.formPos : OPP_POS;
+  for(let k=0;k<n;k++){
+    const pr = prFrom + (prTo-prFrom)*((k+1)/n);
+    setTeamShift(m, side, pr);
+    const xT = ours ? 18 + pr*68 : 82 - pr*68;              // zone où doit arriver le ballon
+    let best = -1, bestScore = -1e9;
+    for(let i=1;i<arr.length;i++){
+      if(i===holder || (ours && !m.usOrder[i])) continue;
+      const bx = base[i].x + (ours ? (m.shiftUs||0) : (m.shiftThem||0));
+      const score = -Math.abs(bx - xT) - Math.abs(base[i].y - (arr[holder]?arr[holder].y:50))*0.25 + Math.random()*16;
+      if(score > bestScore){ bestScore = score; best = i; }
+    }
+    if(best<0) break;
+    const from = arr[holder] || {x:50,y:50};
+    arr[best].x = clamp(xT + rand(-5,5), 4, 96);
+    arr[best].y = clamp(base[best].y + rand(-9,9), 6, 94);
+    const fwd = (arr[best].x - from.x) * (ours?1:-1), dist = Math.hypot(arr[best].x-from.x, (arr[best].y-from.y)*0.65);
+    const type = dist > 34 ? "longue" : fwd > 12 ? "avant" : fwd < -6 ? "retrait" : "courte";
+    m.pos.ball.x = arr[best].x; m.pos.ball.y = arr[best].y;
+    countPass(m, side);
+    applyFrame(m);
+    if(Math.random() < talk){
+      pushEntry(m, {min:m.minute, goal:false, text: pick(PASS_LINES[type]).replace("{a}", playerNameAt(m,side,holder)).replace("{b}", playerNameAt(m,side,best))});
+    }
+    holder = best;
+    await mDelay(type==="longue" ? 1150 : type==="avant" ? 950 : 780);
+  }
+  return holder;
+}
+
+// Minute "calme" : circulation de balle de l'équipe en possession, parfois perdue sur une interception.
+async function playPossessionMinute(m){
+  const usHas = Math.random()*100 < (m.stats ? m.stats.possUs : 50);
+  const side = usHas ? "us" : "them";
+  const arr = usHas ? m.pos.us : m.pos.them;
+  let holder = 1 + Math.floor(Math.random()*8);
+  if(usHas && !m.usOrder[holder]){ const f = m.usOrder.findIndex((p,i)=> i>0 && p); holder = f>0 ? f : 1; }
+  m.pos.ball.x = arr[holder].x; m.pos.ball.y = arr[holder].y;
+  const pr0 = rand(0.15, 0.45);
+  holder = await playPassChain(m, side, holder, 1 + Math.floor(Math.random()*3), pr0, pr0 + rand(-0.05, 0.25), 0.3);
+  if(Math.random() < 0.22){
+    const other = usHas ? "them" : "us";
+    const oArr = usHas ? m.pos.them : m.pos.us;
+    let thief = 5 + Math.floor(Math.random()*4);
+    if(other==="us" && !m.usOrder[thief]) thief = 1 + Math.floor(Math.random()*4);
+    if(oArr[thief]){ oArr[thief].x = m.pos.ball.x + rand(-3,3); oArr[thief].y = m.pos.ball.y + rand(-3,3); }
+    applyFrame(m);
+    if(Math.random() < 0.5) pushEntry(m, {min:m.minute, goal:false, text: pick([
+      `Interception de ${playerNameAt(m,other,thief)} !`,
+      `${playerNameAt(m,other,thief)} récupère le ballon dans les pieds de ${playerNameAt(m,side,holder)}.`,
+      `Bon pressing, ${playerNameAt(m,other,thief)} gagne son duel.`])});
+    updatePossession(m, other==="us");
+    await mDelay(500);
+  } else if(Math.random() < 0.12){
+    const fillers = ["Le public pousse son équipe.","Circulation de balle patiente pour casser le bloc adverse.","Le rythme retombe un peu au milieu.","Les deux blocs se jaugent."];
+    pushEntry(m, {min:m.minute, goal:false, text:pick(fillers)});
+  }
+  relaxTeamShift(m);
+}
+
 async function playSequence(m, side, outcome){
   // outcome: "goal" | "saved" (on target, stopped) | "off" (missed target) | "corner"
   const lane = pick([25,50,75]);
@@ -6122,26 +6360,32 @@ async function playSequence(m, side, outcome){
   const base = ours ? m.formPos : OPP_POS;
   const dir = ours ? 1 : -1;
   const goalX = ours ? 95 : 5;
-  const nameOf = (i)=> ours ? (m.usOrder[i] ? m.usOrder[i].nom : "Un joueur") : m.opp;
-
-  arr[advIdx].x = clamp(base[advIdx].x + dir*18, 5, 95);
-  arr[advIdx].y = clamp(base[advIdx].y + rand(-10,10), 10, 90);
-  m.pos.ball.x = arr[advIdx].x; m.pos.ball.y = arr[advIdx].y;
+  const nameOf = (i)=> playerNameAt(m, side, i);
+  // v44 : vraie construction — 2 à 5 passes entre joueurs nommés, le bloc monte avec le ballon
+  let holder = 1 + Math.floor(Math.random()*7);
+  if(ours && !m.usOrder[holder]){ const f = m.usOrder.findIndex((p,k)=> k>0 && p); holder = f>0 ? f : 1; }
+  if(holder===shooterIdx) holder = Math.max(1, shooterIdx-4);
+  m.pos.ball.x = arr[holder].x; m.pos.ball.y = arr[holder].y;
   applyFrame(m);
-  if(Math.random() < 0.55) pushEntry(m, {min:m.minute, goal:false, text:`Passe de ${nameOf(advIdx)} qui fait avancer le jeu.`});
-  await delay(430);
-
-  arr[attIdx].x = clamp(base[attIdx].x + dir*22, 5, 95);
-  arr[attIdx].y = clamp(m.pos.ball.y + rand(-8,8), 10, 90);
-  m.pos.ball.x = clamp(m.pos.ball.x + dir*18, 8, 92);
-  m.pos.ball.y = arr[attIdx].y;
+  holder = await playPassChain(m, side, holder, 2 + Math.floor(Math.random()*4), 0.12, 0.62, 0.55);
+  // dernier geste : centre ou passe en profondeur vers le tireur qui attaque la surface
+  const assistIdx = (holder !== shooterIdx) ? holder : advIdx;
+  const wide = arr[assistIdx] && (arr[assistIdx].y < 28 || arr[assistIdx].y > 72);
+  setTeamShift(m, side, 0.85);
+  arr[shooterIdx].x = clamp(goalX - dir*rand(9,16), 5, 95);
+  arr[shooterIdx].y = clamp(lane + rand(-8,8), 22, 78);
+  if(wide && arr[assistIdx]) arr[assistIdx].x = clamp(goalX - dir*rand(6,14), 5, 95);
+  m.pos.ball.x = arr[shooterIdx].x; m.pos.ball.y = arr[shooterIdx].y;
+  countPass(m, side);
   applyFrame(m);
-  if(Math.random() < 0.4) pushEntry(m, {min:m.minute, goal:false, text: ours ? `${nameOf(attIdx)} élimine son adversaire et se rapproche du but.` : `${m.opp} accélère et se rapproche de notre surface.`});
-  await delay(430);
+  pushEntry(m, {min:m.minute, goal:false, text: wide
+    ? pick([`Centre de ${nameOf(assistIdx)} vers ${nameOf(shooterIdx)}…`, `${nameOf(assistIdx)} déborde et centre pour ${nameOf(shooterIdx)} !`])
+    : pick([`Passe en profondeur de ${nameOf(assistIdx)} pour ${nameOf(shooterIdx)} !`, `${nameOf(assistIdx)} lance ${nameOf(shooterIdx)} dans la surface…`, `Une-deux entre ${nameOf(assistIdx)} et ${nameOf(shooterIdx)} !`])});
+  await mDelay(950);
 
   m.pos.ball.x = goalX; m.pos.ball.y = lane;
   applyFrame(m);
-  await delay(380);
+  await mDelay(420);
 
   const st = m.stats;
   if(outcome === "goal"){
@@ -6152,11 +6396,12 @@ async function playSequence(m, side, outcome){
       if(scorer) scorer.buts = (scorer.buts||0) + 1;
     } else m.them++;
     pushEntry(m, {min:m.minute, goal:true, text: ours
-      ? `⚽ BUT ! ${nameOf(shooterIdx)} conclut d'un tir précis !`
-      : `⚽ But encaissé — ${m.opp} punit la défense française.`});
+      ? `⚽ BUT ! ${nameOf(shooterIdx)} conclut d'un tir précis ! (passe décisive : ${nameOf(assistIdx)})`
+      : `⚽ But encaissé — ${nameOf(shooterIdx)} (${m.opp}) punit la défense française, sur un service de ${nameOf(assistIdx)}.`});
     flashResult(m, side, shooterIdx);
-    await delay(500);
+    await mDelay(1600);
     m.pos.ball.x = 50; m.pos.ball.y = 50;
+    m.shiftUs = 0; m.shiftThem = 0;
     applyFrame(m);
   } else if(outcome === "save-great"){
     if(ours){ st.tirsUs++; st.cadresUs++; } else { st.tirsThem++; st.cadresThem++; }
@@ -6166,8 +6411,8 @@ async function playSequence(m, side, outcome){
     if(isLiveScreenActive(m)) SFX.crowdBurst(false, false);
     if(window.Stade3D) Stade3D.onEvent(m, "save");
     pushEntry(m, {min:m.minute, goal:false, text: ours
-      ? `🧤 ARRÊT EXCEPTIONNEL du gardien adverse sur la tentative de ${nameOf(shooterIdx)} !`
-      : `🧤 Parade exceptionnelle de notre gardien, ovation du Stade de France !`});
+      ? `🧤 ARRÊT EXCEPTIONNEL de ${playerNameAt(m,"them",0)} sur la tentative de ${nameOf(shooterIdx)} !`
+      : `🧤 Parade exceptionnelle de ${playerNameAt(m,"us",0)} devant ${nameOf(shooterIdx)}, ovation du stade !`});
   } else if(outcome === "post"){
     if(ours) st.tirsUs++; else st.tirsThem++;
     m.pos.ball.x = clamp(goalX + (ours?-3:3), 2, 98); m.pos.ball.y = pick([8,92]);
@@ -6177,15 +6422,15 @@ async function playSequence(m, side, outcome){
     if(window.Stade3D) Stade3D.onEvent(m, "post");
     pushEntry(m, {min:m.minute, goal:false, text: ours
       ? `🥴 Le POTEAU repousse la frappe de ${nameOf(shooterIdx)} ! Si près du but...`
-      : `😅 ${m.opp} trouve le poteau, la barre transversale sauve les Bleus !`});
+      : `😅 ${nameOf(shooterIdx)} trouve le poteau, les Bleus ont eu chaud !`});
   } else if(outcome === "saved"){
     if(ours){ st.tirsUs++; st.cadresUs++; } else { st.tirsThem++; st.cadresThem++; }
     m.pos.ball.x = clamp(m.pos.ball.x - dir*14, 15, 85);
     m.pos.ball.y = 50;
     applyFrame(m);
     pushEntry(m, {min:m.minute, goal:false, text: ours
-      ? `Tir de ${nameOf(shooterIdx)}, repoussé par le gardien !`
-      : `Frappe adverse captée par notre gardien.`});
+      ? `Tir de ${nameOf(shooterIdx)}, repoussé par ${playerNameAt(m,"them",0)} !`
+      : `Frappe de ${nameOf(shooterIdx)} captée par ${playerNameAt(m,"us",0)}.`});
   } else if(outcome === "corner"){
     if(ours) st.corUs++; else st.corThem++;
     if(ours) st.tirsUs++; else st.tirsThem++;
@@ -6193,7 +6438,7 @@ async function playSequence(m, side, outcome){
     applyFrame(m);
     pushEntry(m, {min:m.minute, goal:false, text: ours
       ? `Tir de ${nameOf(shooterIdx)} dévié — corner pour la France.`
-      : `${m.opp} obtient un corner après une frappe contrée.`});
+      : `Frappe de ${nameOf(shooterIdx)} contrée, corner pour ${m.opp}.`});
   } else {
     if(ours) st.tirsUs++; else st.tirsThem++;
     m.pos.ball.x = clamp(m.pos.ball.x + dir*10, 5, 95);
@@ -6201,8 +6446,10 @@ async function playSequence(m, side, outcome){
     applyFrame(m);
     pushEntry(m, {min:m.minute, goal:false, text: ours
       ? `Tir de ${nameOf(shooterIdx)}, largement à côté !`
-      : `${m.opp} manque le cadre de peu.`});
+      : `${nameOf(shooterIdx)} (${m.opp}) manque le cadre de peu.`});
   }
+  await mDelay(500);
+  relaxTeamShift(m);
 }
 
 async function playMidfield(m){
@@ -6216,7 +6463,8 @@ async function playMidfield(m){
 
 function updatePossession(m, favUs){
   const target = favUs ? clamp(50 + (m.ourStrength-m.oppStrength)/3 + rand(-4,4), 30, 75) : clamp(50 - (m.ourStrength-m.oppStrength)/3 + rand(-4,4), 25, 70);
-  m.stats.possUs = Math.round(m.stats.possUs*0.75 + target*0.25);
+  m.stats._pf = (typeof m.stats._pf === "number" ? m.stats._pf : m.stats.possUs)*0.93 + target*0.07;   // flottant : évite de rester bloqué par l'arrondi
+  m.stats.possUs = Math.round(m.stats._pf);
   m.stats.possThem = 100 - m.stats.possUs;
 }
 
@@ -6229,7 +6477,7 @@ async function playFoul(m, side){
   const cardChance = Math.max(0.04, 0.16 + (weather.passFail||0)*0.3 - (state.staff.mental||0)*0.025);
   if(cardRoll < cardChance){
     if(isLiveScreenActive(m)) SFX.cardBlip();
-    let target = null, targetName = m.opp, isRed = Math.random() < 0.12;
+    let target = null, targetName = `${playerNameAt(m,"them",1+Math.floor(Math.random()*10))} (${m.opp})`, isRed = Math.random() < 0.12;
     if(ours){
       const onPitch = m.usOrder.filter(Boolean);
       target = pick(onPitch);
@@ -6271,9 +6519,9 @@ async function playFoul(m, side){
       } else { m.oppStrength -= 0.5; }
     }
   } else {
-    pushEntry(m, {min:m.minute, goal:false, text: ours ? `Faute sifflée contre ${m.opp}, coup franc pour les Bleus.` : `Faute de notre équipe, ${m.opp} récupère un coup franc.`});
+    pushEntry(m, {min:m.minute, goal:false, text: ours ? `Faute de ${playerNameAt(m,"them",1+Math.floor(Math.random()*10))} (${m.opp}), coup franc pour nous.` : `Faute de ${playerNameAt(m,"us",1+Math.floor(Math.random()*10))}, ${m.opp} récupère un coup franc.`});
   }
-  await delay(420);
+  await mDelay(900);
 }
 
 async function playInjury(m){
@@ -6285,7 +6533,7 @@ async function playInjury(m){
   const severity = Math.max(1, pick([1,1,2,3]) - Math.round(severityCut));
   const label = severity>=3 ? "une blessure sérieuse" : severity===2 ? "un vilain coup" : "une petite alerte physique";
   pushEntry(m, {min:m.minute, goal:false, text:`🩼 Coup dur : ${victim.nom} souffre d'${label} et grimace au sol.`});
-  await delay(400);
+  await mDelay(1200);
   const bench = (m.benchIds||[]).map(id=>ctxPlayerById(m,id)).filter(Boolean).sort((a,b)=> overall(b)-overall(a));
   victim.blessuresNb = (victim.blessuresNb||0) + 1;
   victim.indispo = Math.max(victim.indispo||0, severity);
@@ -6344,7 +6592,7 @@ async function tickMatch(matchObj){
     if(isLiveScreenActive(matchObj)) showFinalButton(matchObj);
     return;
   }
-  if(!matchObj.extraTime && !matchObj.halftimeDone && matchObj.minute>=42){
+  if(!matchObj.extraTime && !matchObj.halftimeDone && matchObj.minute>=45){
     matchObj.halftimeDone = true;
     matchObj.minute = 45;
     SFX.whistle(false);
@@ -6372,7 +6620,10 @@ async function tickMatch(matchObj){
     if(isLiveScreenActive(matchObj)) showFinalButton(matchObj);
     return;
   }
-  matchObj.minute += matchObj.extraTime ? 1 : 5;
+  matchObj.minute += 1;   // v44 : minute par minute (avant : +5 en temps réglementaire)
+  // Probabilités historiques calibrées pour une tranche de 5 minutes -> ramenées à la minute.
+  // (La prolongation en mort subite gardait déjà un pas d'1 minute avec ces probabilités : inchangée.)
+  const PER_MIN = matchObj.extraTime ? 1 : 0.2;
   if(isLiveScreenActive(matchObj)) updateScoreboardDOM(matchObj);
 
   const style = STYLES[matchObj.styleKey] || STYLES.equilibre;
@@ -6383,8 +6634,8 @@ async function tickMatch(matchObj){
   const theirChance = 0.16 - Math.max(-0.1, Math.min(0.25, diff/300)) + (style.concedeMod ? style.concedeMod*0.4 : 0) + halftimeConcede*0.4;
   const roll = Math.random();
   let side = null;
-  if(roll < ourChance) side = "us";
-  else if(roll < ourChance + theirChance) side = "them";
+  if(roll < ourChance*PER_MIN) side = "us";
+  else if(roll < (ourChance + theirChance)*PER_MIN) side = "them";
 
   updatePossession(matchObj, side==="us" ? true : (side==="them" ? false : Math.random()<0.5));
 
@@ -6400,11 +6651,11 @@ async function tickMatch(matchObj){
       outcome = remainder < 0.28 ? "saved" : remainder < 0.40 ? "save-great" : remainder < 0.55 ? "post" : (remainder < 0.78 ? "off" : "corner");
     }
     await playSequence(matchObj, side, outcome);
-  } else if(Math.random() < 0.24){
+  } else if(Math.random() < 0.24*PER_MIN){
     await playFoul(matchObj, Math.random()<0.5 ? "us" : "them");
   } else {
-    if(isLiveScreenActive(matchObj) && Math.random() < 0.16) SFX.ambientCheer();
-    await playMidfield(matchObj);
+    if(isLiveScreenActive(matchObj) && Math.random() < 0.16*PER_MIN) SFX.ambientCheer();
+    await playPossessionMinute(matchObj);
   }
 
   // But en or : dès qu'un but est marqué pendant la mort subite, le match s'arrête immédiatement.
@@ -6422,13 +6673,13 @@ async function tickMatch(matchObj){
   }
 
   const injChance = 0.018 * ((DIFFICULTIES[(state.settings&&state.settings.difficulty)||"normal"]||DIFFICULTIES.normal).injuryMod) * (weather.injuryMod||1) * (1 - (state.staff.medecin||0)*0.12);
-  if(matchObj.minute < (matchObj.extraTime?150:90) && Math.random() < injChance){
+  if(matchObj.minute < (matchObj.extraTime?150:90) && Math.random() < injChance*PER_MIN){
     await playInjury(matchObj);
   }
 
   matchObj._tickN = (matchObj._tickN||0) + 1;
-  if(matchObj._tickN % 4 === 0) saveGame();
-  setTimeout(()=> tickMatch(matchObj), 850);
+  if(matchObj._tickN % 10 === 0) saveGame();
+  setTimeout(()=> tickMatch(matchObj), 260 * MATCH_PACES[matchPaceKey()].f);
 }
 
 function finishMatch(matchObj){
@@ -6795,7 +7046,7 @@ function updateScoreboardDOM(m){
     const pb = document.getElementById("possBar"), pv = document.getElementById("possVal"), ms = document.getElementById("miniStats");
     if(pb) pb.style.width = stats.possUs + "%";
     if(pv) pv.textContent = stats.possUs + "%";
-    if(ms) ms.textContent = `Tirs ${stats.tirsUs}-${stats.tirsThem} · Corners ${stats.corUs}-${stats.corThem} · Cartons ${stats.cartons.length}`;
+    if(ms) ms.textContent = `Passes ${stats.passUs||0}-${stats.passThem||0} · Tirs ${stats.tirsUs}-${stats.tirsThem} · Corners ${stats.corUs}-${stats.corThem} · Cartons ${stats.cartons.length}`;
     const cb = document.getElementById("crowdBar"), cv = document.getElementById("crowdVal");
     if(cb || cv){
       const ambiance = clamp(50 + (m.us-m.them)*14 + (stats.possUs-50)/2 + (m.home?6:-4), 8, 100);
@@ -6829,25 +7080,25 @@ async function playPenaltyShootoutAnimation(m){
   const usPerKick = clamp(0.74 + skew, 0.55, 0.92);
   const oppPerKick = clamp(0.74 - skew, 0.55, 0.92);
   pushEntry(m, {min:120, goal:false, text:`🥅 Toujours à égalité après prolongation : place à la séance de tirs au but entre ${teamName} et ${m.opp} !`});
-  await delay(700);
+  await mDelay(700);
   let usScore = 0, oppScore = 0, round = 0;
   while(true){
     round++;
     const usScored = Math.random() < usPerKick;
     if(usScored) usScore++;
     pushEntry(m, {min:120, goal:false, text: usScored ? `🥅 ${teamName} transforme son tir (${usScore}-${oppScore}).` : `❌ ${teamName} manque son tir (${usScore}-${oppScore}).`});
-    await delay(620);
+    await mDelay(620);
     const oppScored = Math.random() < oppPerKick;
     if(oppScored) oppScore++;
     pushEntry(m, {min:120, goal:false, text: oppScored ? `🥅 ${m.opp} transforme son tir (${usScore}-${oppScore}).` : `❌ ${m.opp} manque son tir (${usScore}-${oppScore}).`});
-    await delay(620);
+    await mDelay(620);
     if(round >= 5 && usScore !== oppScore) break;
     if(round >= 15) { if(usScore===oppScore) usScore++; break; } // filet de sécurité (quasi jamais atteint)
   }
   m.penaltiesScore = {us:usScore, opp:oppScore};
   m.wonPensResult = usScore > oppScore;
   pushEntry(m, {min:120, goal:false, text:"🤐 Fin de la séance, place au verdict..."});
-  await delay(500);
+  await mDelay(500);
 }
 
 function showFinalButton(m){
@@ -6892,7 +7143,7 @@ function buildLiveMatch(el, m){
     <div id="minuteLabel" style="text-align:center;font-family:'Barlow Condensed';color:var(--gold);font-weight:700;margin:-4px 0 10px;">${m.minute}'${m.finalWhistlePlayed?' · Fin':(m.extraTime?' · Prolongation':'')}</div>
     <div class="crowd-meter"><div class="lab"><span>🔊 Ambiance du stade</span><span id="crowdVal">${Math.round(ambiance)}%</span></div><div class="crowd-track"><div class="crowd-fill" id="crowdBar" style="width:${ambiance}%"></div></div></div>
     <div class="bar-row" style="margin-top:0;"><div class="bar-label">Possession</div><div class="bar-track"><div class="bar-fill" id="possBar" style="width:${stx.possUs}%"></div></div><div class="bar-val" id="possVal">${stx.possUs}%</div></div>
-    <div class="formation-note" id="miniStats" style="margin:0 0 10px;">Tirs ${stx.tirsUs}-${stx.tirsThem} · Corners ${stx.corUs}-${stx.corThem} · Cartons ${stx.cartons.length}</div>
+    <div class="formation-note" id="miniStats" style="margin:0 0 10px;">Passes ${stx.passUs||0}-${stx.passThem||0} · Tirs ${stx.tirsUs}-${stx.tirsThem} · Corners ${stx.corUs}-${stx.corThem} · Cartons ${stx.cartons.length}</div>
     <div class="pitch-wrap" id="pitchWrap">
       <div class="pitch-tilt"></div>
       <div class="stand"></div>
@@ -6907,9 +7158,12 @@ function buildLiveMatch(el, m){
       <div class="ball" id="ball"></div>
     </div>
     <div class="commentary" id="commentary"></div>
-    <button class="btn btn-ghost" id="subsBtn" style="margin-top:10px;" ${(m.subsUsed>=m.subsMax || m.finalWhistlePlayed)?'disabled':''}>
-      🔄 Remplacements (${m.subsUsed}/${m.subsMax})
-    </button>
+    <div class="live-actions">
+      <button class="btn btn-ghost" id="subsBtn" ${(m.subsUsed>=m.subsMax || m.finalWhistlePlayed)?'disabled':''}>
+        🔄 Remplacements (${m.subsUsed}/${m.subsMax})
+      </button>
+      <button class="btn btn-ghost" id="paceBtn" title="Rythme du match"><span data-pace-label>${MATCH_PACES[matchPaceKey()].label}</span></button>
+    </div>
     <div id="liveMatchFooter"></div>
   `;
   placeAllDots(m);
@@ -6918,6 +7172,8 @@ function buildLiveMatch(el, m){
   if(m.finalWhistlePlayed) showFinalButton(m);
   const subsBtn = el.querySelector("#subsBtn");
   if(subsBtn && m.subsUsed<m.subsMax && !m.finalWhistlePlayed) subsBtn.onclick = ()=> openSubstitutionSheet(m);
+  const paceBtn = el.querySelector("#paceBtn");
+  if(paceBtn) paceBtn.onclick = cycleMatchPace;
   spawnWeatherFx(m);
   if(!m.finalWhistlePlayed) startAmbientMotion(m);
   mountStade3D(el.querySelector("#pitchWrap"), m);
@@ -6933,6 +7189,15 @@ function mountStade3D(wrap, m){
   b.className = "s3d-enable"; b.textContent = "🎥 Vue 3D";
   b.onclick = ()=>{ Stade3D.setEnabled(true); render(); };
   wrap.appendChild(b);
+}
+// v44 : feuille de match adverse (vrais joueurs pour les sélections, effectif crédible pour les clubs)
+function renderOppLineupCard(next){
+  const names = oppNamesFor(next);
+  const lines = [["GB",[0]],["DÉF",[1,2,3,4]],["MIL",[5,6,7,8]],["ATT",[9,10]]];
+  return `<div class="opp-lineup">
+    <div class="opp-lineup-head"><span>📋 Composition probable</span><b>${next.opp}</b></div>
+    ${lines.map(([lab,idx])=>`<div class="opp-line"><span class="opp-pos">${lab}</span><span class="opp-names">${idx.map(i=>`<span>${names[i]}</span>`).join("")}</span></div>`).join("")}
+  </div>`;
 }
 function mountMatchHero(el, ctx, next){
   const hero = el.querySelector("#s3dHero");
@@ -7470,6 +7735,7 @@ function renderClubMatchTab(el){
     el.insertAdjacentHTML("beforeend", `
       <div class="eyebrow" style="margin-top:14px;">Prochain match — vs ${next.opp}</div>
       <div class="s3d-hero" id="s3dHero"></div>
+      ${renderOppLineupCard(next)}
       <div class="tactic-bar" id="openClubTactics">
         <div>
           <div class="tactic-label">Tactique</div>

@@ -79,5 +79,5 @@ jobs:
             📱 **Installer sur Android** : téléchargez `Selectionneur-v${{ env.VERSION }}.apk` ci-dessous depuis le téléphone, ouvrez-le et autorisez l'installation d'applications de cette source si Android le demande.
             Les mises à jour s'installent par-dessus la version précédente (même signature) : la sauvegarde est conservée.
 
-            🌐 `selectionneur_v43.html` : version « un seul fichier » du jeu (navigateur, sans installation).
+            🌐 `selectionneur_v44.html` : version « un seul fichier » du jeu (navigateur, sans installation).
           files: out/*

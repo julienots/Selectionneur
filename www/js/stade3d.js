@@ -273,13 +273,20 @@
     return t;
   }
 
-  function makeNumberTexture(num, fg, bg){
-    return canvasTex(128,128,(g,w,h)=>{
+  // Dos du maillot : NOM (vrai joueur) au-dessus du numéro, comme sur les vraies tenues
+  function makeNumberTexture(num, fg, bg, name){
+    return canvasTex(256,256,(g,w,h)=>{
       g.fillStyle=bg; g.fillRect(0,0,w,h);
-      g.fillStyle=fg; g.font="bold 86px 'Bebas Neue', 'Barlow Condensed', sans-serif";
-      g.textAlign="center"; g.textBaseline="middle"; g.fillText(String(num), w/2, h/2+6);
+      g.fillStyle=fg; g.textAlign="center"; g.textBaseline="middle";
+      if(name){
+        g.font="bold 40px 'Barlow Condensed', 'Bebas Neue', sans-serif";
+        g.fillText(name.toUpperCase(), w/2, 38, w-16);
+      }
+      g.font="bold 168px 'Bebas Neue', 'Barlow Condensed', sans-serif";
+      g.fillText(String(num), w/2, name ? 158 : 136);
     });
   }
+  function backName(full){ const parts = String(full||"").trim().split(/\s+/); return parts.length>1 ? parts.slice(1).join(" ") : parts[0]||""; }
 
   function makeShirtTexture(kit){
     // Maillot avec motif (rayures / damier) + légère texture tissu
@@ -349,7 +356,7 @@
   let cur = null;       // {m, container, hud...}
   let rafId = 0, running = false;
   let camMode = 0;
-  const CAM_MODES = ["TV", "Proche", "Tribune", "Drone"];
+  const CAM_MODES = ["TV", "Proche", "Tactique", "Tribune", "Drone"];
   let fsOn = false;
 
   function initRenderer(){
@@ -713,7 +720,8 @@
     SHARED.shin = new T.CapsuleGeometry(0.062, 0.32, 3, 8); SHARED.shin.translate(0,-0.21,0);
     SHARED.boot = new T.BoxGeometry(0.1, 0.07, 0.26); SHARED.boot.translate(0,-0.03,0.05);
     SHARED.glove = new T.SphereGeometry(0.06, 8, 6);
-    SHARED.numPlane = new T.PlaneGeometry(0.24, 0.24);
+    SHARED.numPlane = new T.PlaneGeometry(0.27, 0.27);
+    SHARED.hand = new T.SphereGeometry(0.045, 8, 6); SHARED.hand.scale(0.8,1.2,0.6);
     SHARED.ok = true;
     return SHARED;
   }
@@ -722,7 +730,7 @@
   const matCache = {};
   function mat(color, rough){ const k=color+"|"+(rough||0.7); return matCache[k] || (matCache[k] = new T.MeshStandardMaterial({color, roughness:rough||0.7})); }
   const numCache = {};
-  function numMat(n, fg, bg){ const k=n+fg+bg; if(!numCache[k]){ numCache[k] = new T.MeshStandardMaterial({map:makeNumberTexture(n,fg,bg), roughness:0.7, polygonOffset:true, polygonOffsetFactor:-2}); } return numCache[k]; }
+  function numMat(n, fg, bg, name){ const k=n+fg+bg+(name||""); if(!numCache[k]){ numCache[k] = new T.MeshStandardMaterial({map:makeNumberTexture(n,fg,bg,name), roughness:0.7, polygonOffset:true, polygonOffsetFactor:-2}); } return numCache[k]; }
   const shirtCache = {};
   function shirtMat(kit){ const k=kit.join("|"); if(!shirtCache[k]){ shirtCache[k] = new T.MeshStandardMaterial({map:makeShirtTexture(kit), roughness:0.72}); } return shirtCache[k]; }
 
@@ -741,7 +749,7 @@
     const head = new T.Mesh(G.head, skin); headG.add(head);
     if(opts.hairStyle !== 3){ const h = new T.Mesh(G.hair, hair); h.position.y = 0.02; h.rotation.x = -0.25; headG.add(h); }
     if(opts.number!==undefined){
-      const np = new T.Mesh(G.numPlane, numMat(opts.number, opts.numColor||"#ffffff", opts.shirt));
+      const np = new T.Mesh(G.numPlane, numMat(opts.number, opts.numColor||"#ffffff", opts.shirt, opts.backName));
       np.position.set(0, 0.3, -0.136); np.rotation.y = Math.PI; spine.add(np);
     }
     const mkArm = (s)=>{
@@ -750,6 +758,7 @@
       const el = new T.Group(); el.position.y = -0.3; sh.add(el);
       const fa = new T.Mesh(G.foreArm, opts.longSleeves ? shirt : skin); el.add(fa);
       if(opts.gloves){ const gl = new T.Mesh(G.glove, mat(opts.gloves)); gl.position.y=-0.3; el.add(gl); }
+      else { const hd = new T.Mesh(G.hand, skin); hd.position.y=-0.29; el.add(hd); }
       sh.rotation.z = s*0.12;
       return {sh, el};
     };
@@ -825,7 +834,9 @@
     if(teams){ teams.all.forEach(h=> scene.remove(h.root)); }
     const kits = teamKits(m);
     teams = {us:[], them:[], all:[], kits, ref:null, linesmen:[], coach:null};
+    const oppNames = (typeof oppNamesFor === "function") ? oppNamesFor(m) : [];
     const mk = (side, i, kit, isGK)=>{
+      const fullName = side==="us" ? ((m.usOrder && m.usOrder[i] && m.usOrder[i].nom) || "") : (oppNames[i] || "");
       const seed = hashStr((side==="us" ? ((m.usOrder&&m.usOrder[i]&&m.usOrder[i].nom)||("us"+i)) : (m.opp+i)));
       const gkKit = side==="us" ? ["#1f9d55","#111111","#1f9d55","#ffffff"] : ["#f2c200","#111111","#f2c200","#111111"];
       const k = isGK ? gkKit : kit;
@@ -833,7 +844,7 @@
         shirt:k[0], shirtMat: isGK ? null : shirtMat(kit), shorts:k[1], socks:k[2], numColor:k[3],
         skin:SKIN_TONES[seed%SKIN_TONES.length], hair:HAIR_TONES[(seed>>>3)%HAIR_TONES.length], hairStyle:(seed>>>6)%5,
         boot:[0x111111,0xf4f4f4,0xff3d7f,0x38e1ff,0xd4ff00][(seed>>>9)%5],
-        number: isGK ? 1 : (i===0?1:i+1), gloves: isGK ? 0xf8f8f8 : null, longSleeves:isGK,
+        number: isGK ? 1 : (i===0?1:i+1), backName: backName(fullName), gloves: isGK ? 0xf8f8f8 : null, longSleeves:isGK,
         scale: 0.94 + ((seed>>>12)%13)/100,
       });
       h.side = side; h.idx = i; h.isGK = isGK;
@@ -1026,6 +1037,9 @@
       p.set(b.x*0.8, narrow?21:17, HW+26); l.set(b.x*0.95, 0, b.z*0.4); fov = narrow?42:27;
     } else if(mode==="Proche"){
       p.set(b.x*0.92, 13, Math.min(HW+16, b.z+30)); l.set(b.x, 0.6, b.z); fov = narrow?44:32;
+    } else if(mode==="Tactique"){
+      // vue 2.5D façon tableau tactique : haute et inclinée, tout le bloc visible (sous l'ouverture du toit)
+      p.set(b.x*0.45, narrow?96:80, 24 + b.z*0.1); l.set(b.x*0.55, 0, b.z*0.2 - 3); fov = narrow?48:42;
     } else if(mode==="Tribune"){
       const side = b.x>0 ? 1 : -1;
       p.set(-side*(HL+24), 22, b.z*0.3); l.set(b.x*0.6+side*10, 0, b.z*0.6); fov = narrow?52:40;
@@ -1147,14 +1161,19 @@
       <div class="s3d-live">● LIVE</div>
       <div class="s3d-tools">
         <button class="s3d-btn" id="s3dCam" title="Changer de caméra">🎥 <span id="s3dCamLbl"></span></button>
+        <button class="s3d-btn" id="s3dPace" title="Rythme du match"><span data-pace-label></span></button>
         <button class="s3d-btn" id="s3dFs" title="Plein écran">⛶</button>
         <button class="s3d-btn" id="s3d2d" title="Vue 2D">2D</button>
       </div>
-      <div class="s3d-carrier" id="s3dCarrier"></div>`;
+      <div class="s3d-carrier" id="s3dCarrier"></div>
+      <div class="s3d-ticker" id="s3dTicker"></div>`;
     container.appendChild(hud);
     const q = (id)=> hud.querySelector("#"+id);
     q("s3dCamLbl").textContent = CAM_MODES[camMode];
     q("s3dCam").onclick = (e)=>{ e.stopPropagation(); camMode = (camMode+1)%CAM_MODES.length; q("s3dCamLbl").textContent = CAM_MODES[camMode]; };
+    const pl = q("s3dPace").querySelector("[data-pace-label]");
+    if(typeof MATCH_PACES !== "undefined" && typeof matchPaceKey === "function"){ pl.textContent = MATCH_PACES[matchPaceKey()].label.split(" ")[0]; q("s3dPace").onclick = (e)=>{ e.stopPropagation(); cycleMatchPace(); }; }
+    else q("s3dPace").remove();
     q("s3dFs").onclick = (e)=>{ e.stopPropagation(); fsOn = !fsOn; applyFs(); };
     q("s3d2d").onclick = (e)=>{ e.stopPropagation(); fsOn = false; applyFs(); S.setEnabled(false); stop(); if(typeof window.render==="function") window.render(); };
     return hud;
@@ -1184,9 +1203,19 @@
     if(c){
       const esc = (x)=> String(x).replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
       if(c.side==="us"){ const p = m.usOrder && m.usOrder[c.idx]; txt = p ? `<b>${c.idx===0?1:c.idx+1}</b> ${esc(p.nom)}` : ""; }
-      else txt = `<b>${c.idx===0?1:c.idx+1}</b> ${esc(m.opp)}`;
+      else { const nm = (typeof oppNamesFor === "function") ? oppNamesFor(m)[c.idx] : null; txt = `<b>${c.idx===0?1:c.idx+1}</b> ${esc(nm || m.opp)}`; }
     }
     if(el.dataset.t !== txt){ el.dataset.t = txt; el.innerHTML = txt; el.style.opacity = txt ? 1 : 0; }
+    // dernier commentaire du match en bandeau (passes, frappes, buts...)
+    const tk = h.querySelector("#s3dTicker"), last = m.log && m.log[m.log.length-1];
+    const n = m.log ? m.log.length : 0;
+    if(tk && last && tk.dataset.n !== String(n)){
+      tk.dataset.n = String(n);
+      tk.innerHTML = `<span class="s3d-tmin">${last.min}'</span>`;
+      tk.appendChild(document.createTextNode(String(last.text).replace(/<[^>]*>/g,"")));
+      tk.classList.toggle("goal", !!last.goal);
+      tk.classList.remove("in"); void tk.offsetWidth; tk.classList.add("in");
+    }
   }
 
   // ---------------------------------------------------------------- confettis
