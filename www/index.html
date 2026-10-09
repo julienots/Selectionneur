@@ -738,6 +738,25 @@ réalistes, mouvements précis, ballon super précis en mouvement, des trucs com
   l'instant présent (instantané REC.snap). Le coup d'envoi attend la fin du ralenti.
 ATTENTION si vous reprenez ce chantier : si vous ajoutez une articulation animée aux humanoïdes,
 ajoutez-la dans jointsOf()/recWrite()/recApply() (et REC.per) sinon elle sera figée en ralenti.
+
+v48 — Demande de Julien : "mets le son de match et un commentateur réaliste avec vraie voix de
+commentateurs". [FAIT] :
+- COMMENTATEURS (module COMMENTATEUR, juste après SFX) : duo commentateur + consultant qui parle en
+  français pendant le match en direct. Voix de synthèse DU TÉLÉPHONE : plugin natif
+  @capacitor-community/text-to-speech dans l'APK (la WebView Android n'a pas speechSynthesis),
+  window.speechSynthesis dans un navigateur. Pas de voix de vrais commentateurs (on n'imite pas une
+  personne réelle) : à la place, débit et hauteur montent selon l'intensité (prio 1 passe → 4 but).
+  Branchement : pushEntry() -> COMMENTATEUR.onEntry(m, entry) ; coup d'envoi (kickoff), mi-temps et
+  fin de match ont leur phrase. Une phrase peu importante est abandonnée si la voix est occupée ;
+  un but coupe la parole. Réglage "Commentateurs" (localStorage "sel-voice", défaut activé), et la
+  voix suit aussi le réglage "Ambiance du stade" (state.settings.sound).
+- SONS (SFX) : frappe de balle synchronisée avec la 3D (Stade3D appelle SFX.kick au départ réel du
+  ballon), filet (net), poteau métallique + "ooh" (post/ooh), chants des tribunes rythmés avec
+  clappings et chœur "allez les Bleus" (chantBar, intensité = ambiance), baisse de l'ambiance quand
+  le commentateur parle (duck).
+ATTENTION si vous reprenez ce chantier : les phrases parlées sont dérivées du TEXTE des entrées du
+log (regex dans onEntry) ; si vous changez une formulation de commentaire, vérifiez qu'elle tombe
+toujours dans la bonne priorité.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -6086,7 +6105,8 @@ function renderSettingsPanels(){
     </div>` : ""}
     <h3 class="set-title">🔊 Son</h3>
     <div class="set-card">
-      ${toggleRow("sound", "🔊", "Ambiance du stade", "Sifflets, chants, acclamations", !!state.settings.sound)}
+      ${toggleRow("sound", "🔊", "Ambiance du stade", "Sifflets, chants, frappes de balle", !!state.settings.sound)}
+      ${toggleRow("voice", "🎙️", "Commentateurs", "Voix française du téléphone, en direct", COMMENTATEUR.on())}
     </div>
     <h3 class="set-title">🎮 Difficulté</h3>
     <div class="set-card">
@@ -6109,6 +6129,7 @@ function bindSettingsPanels(root){
     if(name==="sound"){ state.settings.sound = on; SFX.setEnabled(on); pendingBgRender = true; saveGame(); }
     if(name==="view3d" && window.Stade3D){ Stade3D.setEnabled(on); pendingBgRender = true; }
     if(name==="ticker" && window.Stade3D) Stade3D.setTicker(on);
+    if(name==="voice"){ COMMENTATEUR.setOn(on); if(on) COMMENTATEUR.say("Bonjour à tous ! Les commentateurs sont prêts pour le prochain match.", 3); }
   });
 }
 function openSettingsSheet(){
@@ -6454,15 +6475,19 @@ const SFX = (function(){
     lfo.connect(lfoGain); lfoGain.connect(g.gain);
     src.connect(band); band.connect(g); g.connect(master);
     src.start(); lfo.start();
-    crowdNodes = {src, g, lfo};
+    crowdNodes = {src, g, lfo, base:0.03};
+    startChants();
   }
   function setCrowdLevel(pct){
     if(!crowdNodes) return;
     const c = getCtx(); if(!c) return;
     const target = 0.02 + clamp(pct,0,1)*0.09;
-    crowdNodes.g.gain.setTargetAtTime(target, c.currentTime, 0.6);
+    crowdNodes.base = target;
+    crowdNodes.g.gain.setTargetAtTime(target*(duckLevel<1?0.5:1), c.currentTime, 0.6);
+    setChantLevel(pct);
   }
   function stopCrowdLoop(){
+    stopChants();
     if(!crowdNodes) return;
     const c = getCtx();
     try{
@@ -6472,7 +6497,179 @@ const SFX = (function(){
     }catch(e){}
     crowdNodes = null;
   }
-  return {unlock, setEnabled, whistle, cardBlip, crowdBurst, startCrowdLoop, setCrowdLevel, stopCrowdLoop, tap, ambientCheer};
+
+  // ---- v48 : sons de match supplémentaires (frappes, filet, poteau, "ooh", chants + clappings) ----
+  function kick(power){
+    if(!enabled()) return;
+    const c = getCtx(); if(!c || !crowdNodes) return;     // seulement pendant un match
+    const t0 = c.currentTime, pw = clamp(power||0.5, 0.15, 1);
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(150 + pw*60, t0); o.frequency.exponentialRampToValueAtTime(55, t0+0.12);
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.10 + pw*0.18, t0+0.004); g.gain.exponentialRampToValueAtTime(0.001, t0+0.16);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0+0.18);
+    const n = c.createBufferSource(); n.buffer = noiseBuffer(0.2, false);
+    const hp = c.createBiquadFilter(); hp.type = "bandpass"; hp.frequency.value = 1800; hp.Q.value = 0.9;
+    const ng = c.createGain(); ng.gain.setValueAtTime(0.05 + pw*0.07, t0); ng.gain.exponentialRampToValueAtTime(0.001, t0+0.05);
+    n.connect(hp); hp.connect(ng); ng.connect(master); n.start(t0); n.stop(t0+0.06);
+  }
+  function net(){
+    if(!enabled()) return;
+    const c = getCtx(); if(!c) return;
+    const t0 = c.currentTime;
+    const n = c.createBufferSource(); n.buffer = noiseBuffer(0.6, false);
+    const bp = c.createBiquadFilter(); bp.type = "highpass"; bp.frequency.value = 2500;
+    const g = c.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.16, t0+0.02); g.gain.exponentialRampToValueAtTime(0.001, t0+0.5);
+    n.connect(bp); bp.connect(g); g.connect(master); n.start(t0); n.stop(t0+0.55);
+  }
+  function post(){
+    if(!enabled()) return;
+    const c = getCtx(); if(!c) return;
+    const t0 = c.currentTime;
+    [920, 1385, 2210].forEach((f,i)=>{
+      const o = c.createOscillator(), g = c.createGain(); o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.09/(i+1), t0+0.003); g.gain.exponentialRampToValueAtTime(0.001, t0+0.9-i*0.2);
+      o.connect(g); g.connect(master); o.start(t0); o.stop(t0+1);
+    });
+    setTimeout(ooh, 120);
+  }
+  function ooh(){
+    if(!enabled()) return;
+    const c = getCtx(); if(!c) return;
+    const t0 = c.currentTime, dur = 1.8;
+    [180, 226, 271, 360].forEach((f,i)=>{
+      const o = c.createOscillator(), g = c.createGain(), lp = c.createBiquadFilter();
+      o.type = "sawtooth"; o.frequency.setValueAtTime(f*(1+i*0.004), t0); o.frequency.linearRampToValueAtTime(f*0.86, t0+dur);
+      lp.type = "bandpass"; lp.frequency.setValueAtTime(520, t0); lp.frequency.linearRampToValueAtTime(380, t0+dur); lp.Q.value = 1.2;
+      g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.035, t0+0.25); g.gain.linearRampToValueAtTime(0, t0+dur);
+      o.connect(lp); lp.connect(g); g.connect(master); o.start(t0); o.stop(t0+dur+0.05);
+    });
+  }
+  // Chants des tribunes : "clap clap — clap clap clap" + chœur lointain, intensité selon l'ambiance
+  let chantTimer = null, chantLevel = 0.5, duckLevel = 1;
+  function clap(t, vol){
+    const c = getCtx(); const n = c.createBufferSource(); n.buffer = noiseBuffer(0.2, false);
+    const bp = c.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1300 + Math.random()*400; bp.Q.value = 0.8;
+    const g = c.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t+0.008); g.gain.exponentialRampToValueAtTime(0.001, t+0.13);
+    n.connect(bp); bp.connect(g); g.connect(master); n.start(t); n.stop(t+0.15);
+  }
+  function chantBar(){
+    if(!enabled() || !crowdNodes) return;
+    const c = getCtx(); const t0 = c.currentTime + 0.05;
+    const v = 0.035 + chantLevel*0.07 * duckLevel;
+    if(Math.random() < 0.35 + chantLevel*0.5){
+      [0, 0.32, 0.96, 1.18, 1.40].forEach(off=> clap(t0+off, v*(0.85+Math.random()*0.3)));
+      // chœur : "al-lez les bleus" (voyelles synthétiques)
+      const notes = [[0,294],[0.32,294],[0.96,330],[1.18,294],[1.4,262]];
+      notes.forEach(([off,f])=>{
+        [1, 1.5, 2.01].forEach((mul,k)=>{
+          const o = c.createOscillator(), g = c.createGain(), bp = c.createBiquadFilter();
+          o.type = "sawtooth"; o.frequency.value = f*mul*(1+ (Math.random()-0.5)*0.01);
+          bp.type = "bandpass"; bp.frequency.value = k===0 ? 700 : 1150; bp.Q.value = 2;
+          const vv = (0.016 + chantLevel*0.03) * duckLevel / (k+1);
+          g.gain.setValueAtTime(0, t0+off); g.gain.linearRampToValueAtTime(vv, t0+off+0.05); g.gain.linearRampToValueAtTime(0, t0+off+0.28);
+          o.connect(bp); bp.connect(g); g.connect(master); o.start(t0+off); o.stop(t0+off+0.32);
+        });
+      });
+    }
+  }
+  function startChants(){ if(chantTimer) return; chantTimer = setInterval(chantBar, 2600); }
+  function stopChants(){ if(chantTimer){ clearInterval(chantTimer); chantTimer = null; } }
+  function setChantLevel(pct){ chantLevel = clamp(pct, 0, 1); }
+  // baisse l'ambiance quand le commentateur parle
+  function duck(on){
+    duckLevel = on ? 0.45 : 1;
+    if(crowdNodes){ const c = getCtx(); crowdNodes.g.gain.setTargetAtTime(crowdNodes.base*(on?0.5:1), c.currentTime, 0.25); }
+  }
+  return {unlock, setEnabled, whistle, cardBlip, crowdBurst, startCrowdLoop, setCrowdLevel, stopCrowdLoop, tap, ambientCheer,
+    kick, net, post, ooh, duck, setChantLevel};
+})();
+
+/* ---------------- v48 : COMMENTATEURS VOCAUX (duo commentateur + consultant) ----------------
+   Voix de synthèse française du téléphone : plugin natif @capacitor-community/text-to-speech dans
+   l'APK (la WebView Android n'a pas speechSynthesis), sinon window.speechSynthesis du navigateur.
+   Ce n'est PAS la voix d'un vrai commentateur (impossible et interdit d'imiter une personne réelle) :
+   c'est la voix du téléphone, rythmée par le jeu (débit/hauteur selon l'intensité de l'action).
+   Priorités : but > occasion/arrêt/carton > action > passe ; une phrase peu importante est
+   abandonnée si la voix est occupée. Préférence localStorage "sel-voice" (défaut : activé). */
+const COMMENTATEUR = (function(){
+  let busy = false, pending = null, nativeTTS = null, voiceA = null, voiceB = null, lastSpoke = 0;
+  function on(){ try{ return localStorage.getItem("sel-voice") !== "0"; }catch(e){ return true; } }
+  function setOn(v){ try{ localStorage.setItem("sel-voice", v ? "1" : "0"); }catch(e){} if(!v) stop(); }
+  function native(){
+    if(nativeTTS !== null) return nativeTTS;
+    const C = window.Capacitor;
+    nativeTTS = (C && C.isNativePlatform && C.isNativePlatform()) ? ((C.Plugins && C.Plugins.TextToSpeech) || (C.registerPlugin && C.registerPlugin("TextToSpeech")) || false) : false;
+    return nativeTTS;
+  }
+  function pickWebVoices(){
+    if(!window.speechSynthesis) return;
+    const vs = speechSynthesis.getVoices().filter(v=> /^fr/i.test(v.lang));
+    voiceA = vs.find(v=> /thomas|paul|male|homme|daniel|henri/i.test(v.name)) || vs[0] || null;
+    voiceB = vs.find(v=> v !== voiceA) || voiceA;
+  }
+  if(window.speechSynthesis){ pickWebVoices(); try{ speechSynthesis.onvoiceschanged = pickWebVoices; }catch(e){} }
+  function clean(t){
+    return String(t).replace(/➜/g, " pour ").replace(/<[^>]*>/g, "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "")
+      .replace(/[()➜]/g, ", ").replace(/\s+,/g, ",").replace(/\s{2,}/g, " ")
+      .replace(/\s*,\s*([!.?…])/g, "$1").replace(/([!?…])\s*,/g, "$1").replace(/[,\s]+$/, "").replace(/^[,\s]+/, "").trim();
+  }
+  function finish(){ busy = false; SFX.duck(false); lastSpoke = Date.now(); if(pending){ const p = pending; pending = null; speak(p); } }
+  function speak(u){
+    if(!on() || !(state.settings && state.settings.sound)) return;
+    if(busy){ if(u.prio >= 3){ stop(); } else { if(!pending || u.prio >= pending.prio) pending = u; return; } }
+    busy = true; SFX.duck(true);
+    const tts = native();
+    if(tts){
+      tts.speak({text:u.text, lang:"fr-FR", rate:u.rate, pitch:u.pitch, volume:1, category:"playback"}).then(finish, finish);
+    } else if(window.speechSynthesis && window.SpeechSynthesisUtterance){
+      const ut = new SpeechSynthesisUtterance(u.text);
+      ut.lang = "fr-FR"; ut.rate = u.rate; ut.pitch = u.pitch;
+      const v = u.consultant ? voiceB : voiceA; if(v) ut.voice = v;
+      ut.onend = finish; ut.onerror = finish;
+      speechSynthesis.speak(ut);
+      setTimeout(()=>{ if(busy && !speechSynthesis.speaking) finish(); }, 9000);
+    } else { busy = false; SFX.duck(false); }
+  }
+  function stop(){
+    pending = null;
+    const tts = native();
+    try{ if(tts) tts.stop(); else if(window.speechSynthesis) speechSynthesis.cancel(); }catch(e){}
+    busy = false; SFX.duck(false);
+  }
+  // prio : 1 passe, 2 action, 3 occasion/carton, 4 but
+  function say(text, prio, opts){
+    opts = opts || {};
+    const excite = prio >= 4 ? 1 : prio === 3 ? 0.55 : prio === 2 ? 0.2 : 0;
+    speak({text:clean(text), prio, consultant:!!opts.consultant,
+      rate: opts.consultant ? 0.98 : 1.02 + excite*0.16, pitch: opts.consultant ? 0.82 : 1 + excite*0.22});
+  }
+  const CONSULTANT_GOAL = [
+    "Quelle finition ! Le gardien ne pouvait rien faire.", "C'est tout le mérite du collectif, regardez ce mouvement.",
+    "Il fallait être là, et il était là. Un vrai renard des surfaces.", "Une action limpide de bout en bout.",
+    "Défensivement, c'est beaucoup trop facile.", "Le stade est debout ! Quelle ambiance !"];
+  const CONSULTANT_CONCEDE = ["C'est un coup dur, il va falloir réagir.", "Il y avait un trou au marquage, c'était trop facile.", "Attention, l'adversaire prend confiance."];
+  function onEntry(m, e){
+    if(!on() || !e || !e.text) return;
+    const raw = String(e.text);
+    if(e.goal){
+      const ours = /BUT !/.test(raw) && !/encaiss/i.test(raw);
+      const team = m.ctx==="club" ? (state.club && state.club.name) || "le club" : "la France";
+      say(ours ? `Buuuut ! ${clean(raw).replace(/^BUT\s*!\s*/i, "")} ! ${m.us} à ${m.them} pour ${team} !` : `But... ${clean(raw)}. ${m.us} à ${m.them}.`, 4);
+      setTimeout(()=> say(pick(ours ? CONSULTANT_GOAL : CONSULTANT_CONCEDE), 2, {consultant:true}), 600);
+      return;
+    }
+    if(/^🟥|^🟨|POTEAU|poteau|ARRÊT|Parade|PETIT PONT|PROLONGATION|Coup de sifflet|BUT EN OR/i.test(raw)) return say(raw, 3);
+    if(/Centre de|déborde|profondeur|lance .* dans la surface|Une-deux|Tête de|Tir de|Frappe de|manque le cadre|corner/i.test(raw)) return say(raw, 3);
+    if(/efface|Passement|Roulette|Crochet|Interception|récupère|pressing|Faute|blessure|Coup dur|Changement|Remplacement/i.test(raw)) return say(raw, 2);
+    if(Date.now() - lastSpoke > 2500 && Math.random() < 0.45) return say(raw, 1);
+  }
+  function kickoff(m){
+    if(!on()) return;
+    const team = m.ctx==="club" ? (state.club && state.club.name) || "notre club" : "France";
+    const lieu = m.home ? (m.ctx==="club" ? "au stade municipal" : "au Stade de France") : "à l'extérieur";
+    say(`Bonsoir à tous, et bienvenue ${lieu} pour ce ${team} – ${m.opp}. L'arbitre siffle le coup d'envoi, c'est parti !`, 3);
+  }
+  return {say, onEntry, kickoff, stop, on, setOn};
 })();
 ["pointerdown","touchstart","keydown"].forEach(ev=> document.addEventListener(ev, ()=> SFX.unlock()));
 let _lastTapSfx = 0;
@@ -6552,7 +6749,7 @@ function delay(ms){ return new Promise(res => setTimeout(res, ms)); }
 
 function pushEntry(m, entry){
   m.log.push(entry);
-  if(isLiveScreenActive(m)){ appendCommentary(entry); updateScoreboardDOM(m); }
+  if(isLiveScreenActive(m)){ appendCommentary(entry); updateScoreboardDOM(m); COMMENTATEUR.onEntry(m, entry); }
 }
 
 function applyFrame(m){
@@ -7101,6 +7298,7 @@ async function tickMatch(matchObj){
       SFX.whistle(true);
       SFX.stopCrowdLoop();
       stopAmbientMotion(matchObj);
+      if(isLiveScreenActive(matchObj)) COMMENTATEUR.say(`C'est terminé ! Score final : ${matchObj.us} à ${matchObj.them}. ${matchObj.us>matchObj.them ? "Une belle victoire !" : matchObj.us<matchObj.them ? "Une défaite qui fait mal." : "Les deux équipes se quittent dos à dos."}`, 4);
     }
     if(isLiveScreenActive(matchObj)) showFinalButton(matchObj);
     return;
@@ -7112,6 +7310,7 @@ async function tickMatch(matchObj){
     stopAmbientMotion(matchObj);
     if(isLiveScreenActive(matchObj)){
       updateScoreboardDOM(matchObj);
+      COMMENTATEUR.say(`C'est la mi-temps ! ${matchObj.us} à ${matchObj.them}. Les joueurs rentrent aux vestiaires.`, 3);
       showHalftimeOverlay(matchObj);
       saveGame();
       return;
@@ -7133,7 +7332,7 @@ async function tickMatch(matchObj){
     if(isLiveScreenActive(matchObj)) showFinalButton(matchObj);
     return;
   }
-  if(!matchObj._ko1){ matchObj._ko1 = true; s3dAction(matchObj, {kind:"kickoff", side:"us"}); setHolder(matchObj, "us", 9); }
+  if(!matchObj._ko1){ matchObj._ko1 = true; s3dAction(matchObj, {kind:"kickoff", side:"us"}); setHolder(matchObj, "us", 9); if(isLiveScreenActive(matchObj)) COMMENTATEUR.kickoff(matchObj); }
   if(matchObj.halftimeDone && !matchObj._ko2 && !matchObj.extraTime){ matchObj._ko2 = true; s3dAction(matchObj, {kind:"kickoff", side:"them"}); setHolder(matchObj, "them", 9); }
   matchObj.minute += 1;   // v44 : minute par minute (avant : +5 en temps réglementaire)
   // Probabilités historiques calibrées pour une tranche de 5 minutes -> ramenées à la minute.
@@ -8785,7 +8984,7 @@ const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform &
 if(IS_NATIVE_APP){
   // Bouton retour Android : ferme d'abord la fiche ouverte / le plein écran 3D, sinon met l'appli
   // en arrière-plan (au lieu de la quitter brutalement en perdant le match en cours à l'écran).
-  const AppPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  const AppPlugin = (window.Capacitor.Plugins && window.Capacitor.Plugins.App) || (window.Capacitor.registerPlugin && window.Capacitor.registerPlugin("App"));
   if(AppPlugin) AppPlugin.addListener("backButton", ()=>{
     const fs = document.querySelector(".s3d-fullscreen .s3d-btn#s3dFs");
     if(fs){ fs.click(); return; }

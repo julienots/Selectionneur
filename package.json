@@ -1,6 +1,6 @@
 {
   "name": "selectionneur",
-  "version": "4.7.0",
+  "version": "4.8.0",
   "private": true,
   "description": "Sélectionneur — manager de foot avec match en direct dans un stade 3D (web + APK Android via Capacitor)",
   "scripts": {
@@ -12,6 +12,7 @@
     "apk": "npx cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.3"

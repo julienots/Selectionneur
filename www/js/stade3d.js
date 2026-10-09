@@ -1000,7 +1000,9 @@
     teams.carrier = h; h.override = null;
     if(!(opts && opts.silent) && !BS.inHands){ h.kick = 1; h.kickAmp = 0.3; }   // contrôle orienté
   }
+  function sfx(name, arg){ try{ if(typeof SFX !== "undefined" && SFX[name]) SFX[name](arg); }catch(e){} }
   function launch(target, speed, h, onEnd){
+    sfx("kick", speed/30);   // le bruit de frappe part au moment exact où le ballon quitte le pied
     BS.mode = "flight"; BS.carrier = null; BS.inHands = false;
     const from = BS.pos.clone(); if(from.y < 0.11) from.y = 0.11;
     const dist = Math.hypot(target.x-from.x, target.z-from.z);
@@ -1169,7 +1171,7 @@
         if(o === "goal"){
           tgt = new T.Vector3(gs*(HL+0.9), 0.11, side*rnd(0.6, GOAL_W/2-0.35)); h = rnd(0.1, 1.7);
           gk.diveDir = Math.sign((-tgt.z) - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.random()<0.6 ? 1 : 0;   // plonge du mauvais côté / trop tard
-          onEnd = ()=>{ BS.mode = "dead"; BS.vel.set(0,0,0); BS.pos.y = 0.3; world.goals[gs>0?1:0].bulge = 1; BS.needsRestart = false; if(pendingGoal){ celebrate(pendingGoal); pendingGoal = null; } else a.goalHit = true; };
+          onEnd = ()=>{ sfx("net"); BS.mode = "dead"; BS.vel.set(0,0,0); BS.pos.y = 0.3; world.goals[gs>0?1:0].bulge = 1; BS.needsRestart = false; if(pendingGoal){ celebrate(pendingGoal); pendingGoal = null; } else a.goalHit = true; };
         } else if(o === "saved"){
           tgt = new T.Vector3(gs*(HL-0.35), 0.11, clamp(gk.pos.z + side*rnd(0.4,1.6), -GOAL_W/2+0.4, GOAL_W/2-0.4)); h = rnd(0.2, 0.9);
           gk.diveDir = Math.sign(tgt.z - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.abs(tgt.z-gk.pos.z) > 0.9 ? 1 : 0;
@@ -1181,15 +1183,15 @@
           onEnd = ()=>{ BS.mode = "loose"; BS.vel.set(gs*rnd(1,3), 0, side*rnd(7,10)); BS.lat=0; setTimeout(()=>{ if(BS.mode==="loose"){ BS.mode="dead"; BS.needsRestart=true; } }, 900); };
         } else if(o === "post"){
           tgt = new T.Vector3(gs*HL, 0.11, side*GOAL_W/2); h = rnd(0.5, 1.2);
-          onEnd = ()=>{ BS.mode = "loose"; BS.vel.set(-gs*rnd(7,11), 0, rnd(-4,4)); };
+          onEnd = ()=>{ sfx("post"); BS.mode = "loose"; BS.vel.set(-gs*rnd(7,11), 0, rnd(-4,4)); };
         } else if(o === "corner"){
           tgt = new T.Vector3(gs*(HL+1.5), 0.11, side*rnd(GOAL_W/2+3, 14)); speed = rnd(18,24); h = 0.6;
           gk.diveDir = Math.sign(tgt.z - gk.pos.z || 1) * (gs>0 ? -1 : 1); gk.dive = Math.random()<0.5?1:0;
-          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; };
+          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; sfx("ooh"); };
         } else {   // "off" : à côté ou au-dessus
           const over = Math.random() < 0.4;
           tgt = new T.Vector3(gs*(HL+6), 0.11, over ? side*rnd(0, 3) : side*rnd(GOAL_W/2+0.8, GOAL_W/2+6)); h = over ? 3.6 : rnd(0.2, 1.8);
-          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; };
+          onEnd = ()=>{ BS.mode = "dead"; BS.needsRestart = true; sfx("ooh"); };
         }
         launch(tgt, speed, h, onEnd);
         a.stage = 2; a.t = 0; return false;
