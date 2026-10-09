@@ -1,6 +1,6 @@
 {
   "name": "selectionneur",
-  "version": "4.8.0",
+  "version": "4.9.0",
   "private": true,
   "description": "Sélectionneur — manager de foot avec match en direct dans un stade 3D (web + APK Android via Capacitor)",
   "scripts": {

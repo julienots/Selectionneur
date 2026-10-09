@@ -757,6 +757,28 @@ commentateurs". [FAIT] :
 ATTENTION si vous reprenez ce chantier : les phrases parlées sont dérivées du TEXTE des entrées du
 log (regex dans onEntry) ; si vous changez une formulation de commentaire, vérifiez qu'elle tombe
 toujours dans la bonne priorité.
+
+v49 — Demande de Julien : "encore plus de vie tout le long du match, toujours du son, stade et
+matchs plus réalistes, IA/mouvements des joueurs, design et mouvement ballon-personnages". [FAIT] :
+- SON CONTINU : SFX ajoute un tambour de tribune en boucle (drumBar), une fanfare de cuivres
+  (hornPhrase), un murmure qui enfle quand le ballon approche d'un but (setTension, piloté par le
+  moteur 3D), lancés/arrêtés avec la boucle de foule (startLife/stopLife). COMMENTATEUR.filler(m)
+  (appelé à chaque minute dans tickMatch) relance le duo après ~7 s de silence : score, possession,
+  tirs, joueurs à surveiller (vrais noms), ambiance, consignes du sélectionneur.
+- IA COLLECTIVE 3D (syncTargets) : ligne défensive alignée ~13 m derrière le ballon et coulissante,
+  milieux entre ballon et but, attaquants adverses qui restent pour la contre ; côté attaque, deux
+  soutiens qui offrent des angles, appels en profondeur des attaquants (sans hors-jeu), latéraux
+  qui donnent la largeur. Allure selon la distance au ballon (trottinement loin de l'action),
+  accélération limitée (~7 m/s²), défenseurs qui reculent face au jeu (h.backward, pas chassés),
+  receveur qui s'oriente vers la passe, gardien sur ses appuis avant la frappe (setT), mains sur
+  les hanches loin de l'action, balancement à l'arrêt.
+- STADE (buildSideline/paintSideline/updateSideline) : 18 photographes derrière les buts avec
+  flashs (plus nombreux quand le ballon approche), 16 stewards en chasuble, 140 drapeaux agités
+  aux couleurs des équipes, 6 banderoles, faisceaux des projecteurs la nuit, 3 remplaçants qui
+  s'échauffent le long de la touche (teams.subs).
+- PERSONNAGES : torse sculpté (LatheGeometry), col de la couleur du numéro, épaules arrondies,
+  coiffures variées (courte, rasée, afro, crâne rasé, queue de cheval). Caméra Drone ramenée
+  dans l'ouverture du toit (le toit masquait le terrain).
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -6476,7 +6498,7 @@ const SFX = (function(){
     src.connect(band); band.connect(g); g.connect(master);
     src.start(); lfo.start();
     crowdNodes = {src, g, lfo, base:0.03};
-    startChants();
+    startChants(); startLife();
   }
   function setCrowdLevel(pct){
     if(!crowdNodes) return;
@@ -6487,7 +6509,7 @@ const SFX = (function(){
     setChantLevel(pct);
   }
   function stopCrowdLoop(){
-    stopChants();
+    stopChants(); stopLife();
     if(!crowdNodes) return;
     const c = getCtx();
     try{
@@ -6580,8 +6602,58 @@ const SFX = (function(){
     duckLevel = on ? 0.45 : 1;
     if(crowdNodes){ const c = getCtx(); crowdNodes.g.gain.setTargetAtTime(crowdNodes.base*(on?0.5:1), c.currentTime, 0.25); }
   }
+
+  // ---- v49 : vie sonore continue (tambour, trompettes de la fanfare, montée de tension) ----
+  let drumTimer = null, hornTimer = null, tensionNode = null;
+  function drumHit(t, vol, low){
+    const c = getCtx(); const o = c.createOscillator(), g = c.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(low ? 95 : 150, t); o.frequency.exponentialRampToValueAtTime(low ? 45 : 70, t+0.18);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t+0.005); g.gain.exponentialRampToValueAtTime(0.001, t+0.3);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t+0.32);
+  }
+  function drumBar(){
+    if(!enabled() || !crowdNodes) return;
+    const c = getCtx(), t0 = c.currentTime + 0.05, v = (0.06 + chantLevel*0.08) * duckLevel;
+    // rythme de tribune : BOUM . boum boum | BOUM . boum boum
+    [[0,1],[0.6,0],[0.9,0],[1.2,1],[1.8,0],[2.1,0]].forEach(([o,l])=> drumHit(t0+o, v*(l?1:0.7), !!l));
+  }
+  function hornPhrase(){
+    if(!enabled() || !crowdNodes || Math.random() > 0.35 + chantLevel*0.4) return;
+    const c = getCtx(), t0 = c.currentTime + 0.05, v = 0.03*duckLevel;
+    // petite fanfare de tribune (cuivres synthétiques)
+    const mel = pick([[392,392,523,523,659,523],[523,587,659,523,784],[440,440,523,587,523,440]]);
+    mel.forEach((f,i)=>{
+      const st = t0 + i*0.22, du = i===mel.length-1 ? 0.6 : 0.2;
+      [1, 2.01].forEach((mul,k)=>{
+        const o = c.createOscillator(), g = c.createGain(), lp = c.createBiquadFilter();
+        o.type = "sawtooth"; o.frequency.value = f*mul; lp.type = "lowpass"; lp.frequency.value = 1800;
+        g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(v/(k+1), st+0.03); g.gain.linearRampToValueAtTime(0, st+du);
+        o.connect(lp); lp.connect(g); g.connect(master); o.start(st); o.stop(st+du+0.05);
+      });
+    });
+  }
+  // murmure qui enfle quand le ballon approche du but (appelé par le moteur 3D)
+  function setTension(x){
+    if(!enabled() || !crowdNodes) return;
+    const c = getCtx();
+    if(!tensionNode){
+      const src = c.createBufferSource(); src.buffer = noiseBuffer(4, false); src.loop = true;
+      const bp = c.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 650; bp.Q.value = 0.7;
+      const g = c.createGain(); g.gain.value = 0;
+      src.connect(bp); bp.connect(g); g.connect(master); src.start();
+      tensionNode = {src, bp, g};
+    }
+    const k = clamp(x, 0, 1);
+    tensionNode.g.gain.setTargetAtTime(k*k*0.12*duckLevel, c.currentTime, 0.35);
+    tensionNode.bp.frequency.setTargetAtTime(550 + k*450, c.currentTime, 0.4);
+  }
+  function startLife(){ if(!drumTimer) drumTimer = setInterval(drumBar, 2400); if(!hornTimer) hornTimer = setInterval(hornPhrase, 17000); }
+  function stopLife(){
+    if(drumTimer){ clearInterval(drumTimer); drumTimer = null; } if(hornTimer){ clearInterval(hornTimer); hornTimer = null; }
+    if(tensionNode){ try{ tensionNode.g.gain.setTargetAtTime(0, getCtx().currentTime, 0.2); tensionNode.src.stop(getCtx().currentTime+0.5); }catch(e){} tensionNode = null; }
+  }
   return {unlock, setEnabled, whistle, cardBlip, crowdBurst, startCrowdLoop, setCrowdLevel, stopCrowdLoop, tap, ambientCheer,
-    kick, net, post, ooh, duck, setChantLevel};
+    kick, net, post, ooh, duck, setChantLevel, setTension};
 })();
 
 /* ---------------- v48 : COMMENTATEURS VOCAUX (duo commentateur + consultant) ----------------
@@ -6663,13 +6735,36 @@ const COMMENTATEUR = (function(){
     if(/efface|Passement|Roulette|Crochet|Interception|récupère|pressing|Faute|blessure|Coup dur|Changement|Remplacement/i.test(raw)) return say(raw, 2);
     if(Date.now() - lastSpoke > 2500 && Math.random() < 0.45) return say(raw, 1);
   }
+  // v49 : quand rien n'a été dit depuis un moment, le duo relance (contexte, stats, ambiance, joueurs)
+  function filler(m){
+    if(!on() || busy || Date.now() - lastSpoke < 7000 || !m || m.finalWhistlePlayed) return;
+    const st = m.stats || {}, team = m.ctx==="club" ? ((state.club && state.club.name) || "le club") : "la France";
+    const ours = (m.usOrder||[]).filter(Boolean), opp = (typeof oppNamesFor==="function") ? oppNamesFor(m) : [];
+    const star = ours.length ? ours.reduce((a,b)=> overall(b) > overall(a) ? b : a) : null;
+    const lines = [
+      `${m.minute}e minute de jeu, le score est de ${m.us} à ${m.them}.`,
+      `Possession de balle : ${st.possUs||50} pour cent pour ${team}.`,
+      `${st.tirsUs||0} tirs pour ${team}, ${st.tirsThem||0} pour ${m.opp}.`,
+      `Le public donne de la voix, quelle ambiance ce soir !`,
+      `On sent ${m.opp} très bien en place, le bloc est compact.`,
+      `Il faudra trouver la faille, la défense de ${m.opp} ne laisse rien passer.`,
+      `Le rythme est soutenu, les organismes vont commencer à fatiguer.`,
+      star ? `Attention à ${star.nom}, c'est lui qui peut faire la différence ce soir.` : `Les deux équipes se cherchent encore.`,
+      opp[9] ? `Côté ${m.opp}, il faut surveiller ${opp[9]}, toujours dangereux.` : `Match encore très ouvert.`,
+      m.us > m.them ? `${team} mène et gère bien son avance pour le moment.` : m.us < m.them ? `${team} doit réagir, il reste du temps.` : `Toujours rien de fait, tout reste possible.`,
+      `Les supporters chantent sans s'arrêter depuis le coup d'envoi !`,
+      `Le sélectionneur est debout dans sa zone technique, il donne des consignes.`,
+    ];
+    const consultant = Math.random() < 0.4;
+    say(pick(lines), 1, {consultant});
+  }
   function kickoff(m){
     if(!on()) return;
     const team = m.ctx==="club" ? (state.club && state.club.name) || "notre club" : "France";
     const lieu = m.home ? (m.ctx==="club" ? "au stade municipal" : "au Stade de France") : "à l'extérieur";
     say(`Bonsoir à tous, et bienvenue ${lieu} pour ce ${team} – ${m.opp}. L'arbitre siffle le coup d'envoi, c'est parti !`, 3);
   }
-  return {say, onEntry, kickoff, stop, on, setOn};
+  return {say, onEntry, kickoff, stop, on, setOn, filler};
 })();
 ["pointerdown","touchstart","keydown"].forEach(ev=> document.addEventListener(ev, ()=> SFX.unlock()));
 let _lastTapSfx = 0;
@@ -7392,6 +7487,7 @@ async function tickMatch(matchObj){
   }
 
   matchObj._tickN = (matchObj._tickN||0) + 1;
+  if(isLiveScreenActive(matchObj)) COMMENTATEUR.filler(matchObj);
   if(matchObj._tickN % 10 === 0) saveGame();
   setTimeout(()=> tickMatch(matchObj), 260 * MATCH_PACES[matchPaceKey()].f);
 }

@@ -514,6 +514,9 @@
 
     // Supporters (instanciés, shader maison)
     buildCrowd(base, lower, upper);
+    // ---- v49 : vie autour du terrain ----
+    buildSideline(base, lower, lowTop, roofY);
+
 
     // Écrans géants derrière les buts
     world.screens = [];
@@ -598,6 +601,106 @@
     const markGeo = new T.RingGeometry(0.55, 0.72, 32); markGeo.rotateX(-Math.PI/2);
     world.ring = new T.Mesh(markGeo, new T.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.85, depthWrite:false}));
     world.ring.renderOrder = 2; world.ring.visible = false; scene.add(world.ring);
+  }
+
+
+  function buildSideline(base, lower, lowTop, roofY){
+    const dummy = new T.Object3D();
+    // Photographes accroupis derrière les buts (corps, tête, appareil à téléobjectif) + flashs
+    const PH = 18;
+    const bodyM = new T.InstancedMesh(new T.BoxGeometry(0.45, 0.7, 0.4), new T.MeshStandardMaterial({color:0x22252c, roughness:0.9}), PH);
+    const headM = new T.InstancedMesh(new T.SphereGeometry(0.13, 10, 8), new T.MeshStandardMaterial({color:0xc68863, roughness:0.7}), PH);
+    const camM = new T.InstancedMesh(new T.CylinderGeometry(0.07, 0.09, 0.42, 10).rotateX(Math.PI/2), new T.MeshStandardMaterial({color:0x0c0c0c, roughness:0.4, metalness:0.3}), PH);
+    world.flashes = [];
+    for(let i=0;i<PH;i++){
+      const side = i < PH/2 ? -1 : 1, k = i % (PH/2);
+      const z = (k - (PH/2-1)/2) * 2.6 + (Math.abs(k-4) < 1 ? 6 : 0);
+      const x = side*(HL+3.6), ry = side > 0 ? -Math.PI/2 : Math.PI/2;
+      dummy.position.set(x, 0.35, z); dummy.rotation.set(0, ry, 0); dummy.updateMatrix(); bodyM.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(x, 0.82, z); dummy.updateMatrix(); headM.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(x - side*0.32, 0.8, z); dummy.updateMatrix(); camM.setMatrixAt(i, dummy.matrix);
+      const fl = new T.Sprite(new T.SpriteMaterial({map:world.glowTex || makeGlowTexture(), color:0xffffff, blending:T.AdditiveBlending, depthWrite:false, transparent:true, opacity:0}));
+      fl.position.set(x - side*0.55, 0.82, z); fl.scale.set(1.6,1.6,1); scene.add(fl);
+      world.flashes.push({sp:fl, side, t:0});
+    }
+    [bodyM, headM, camM].forEach(mm=>{ mm.castShadow = true; scene.add(mm); });
+    // Stewards en chasuble orange, assis face au public le long de la piste
+    const ST = 16;
+    const stB = new T.InstancedMesh(new T.BoxGeometry(0.45, 0.55, 0.32), new T.MeshStandardMaterial({color:0xff7a1a, roughness:0.6, emissive:0x331400}), ST);
+    const stH = new T.InstancedMesh(new T.SphereGeometry(0.12, 10, 8), new T.MeshStandardMaterial({color:0x9a6643, roughness:0.7}), ST);
+    for(let i=0;i<ST;i++){
+      const side = i % 2 ? 1 : -1, x = -HL + 8 + (i>>1)*((L-16)/7);
+      const z = side*(HW+7.6);
+      dummy.position.set(x, 0.45, z); dummy.rotation.set(0, side>0 ? 0 : Math.PI, 0); dummy.updateMatrix(); stB.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(x, 0.85, z); dummy.updateMatrix(); stH.setMatrixAt(i, dummy.matrix);
+    }
+    scene.add(stB); scene.add(stH);
+    // Drapeaux agités dans les tribunes (couleurs repeintes à chaque match, cf. paintFlags)
+    const FL = 140;
+    const fg = new T.PlaneGeometry(1.3, 0.85, 4, 1); fg.translate(0.65, 0, 0);
+    world.crowdFlags = new T.InstancedMesh(fg, new T.MeshStandardMaterial({side:T.DoubleSide, roughness:0.8}), FL);
+    world.crowdFlags.instanceColor = new T.InstancedBufferAttribute(new Float32Array(FL*3), 3);
+    world.flagSpots = [];
+    for(let i=0;i<FL;i++){
+      const b = base[(Math.random()*base.length)|0], row = (Math.random()*20)|0;
+      const d = row*0.82 + 0.4, h = 1.3 + row*0.42 + 1.4;
+      world.flagSpots.push({x:b.x + b.nx*d, y:h, z:b.z + b.nz*d, ry:Math.atan2(-b.nx, -b.nz) + Math.PI/2, ph:Math.random()*6, sp:2 + Math.random()*2});
+    }
+    world.crowdFlags.frustumCulled = false; scene.add(world.crowdFlags);
+    // Banderoles sur le devant de l'anneau inférieur
+    world.banners = [];
+    const bannerSpots = [[0, 1], [-30, 1], [30, 1], [0, -1], [-30, -1], [30, -1]];
+    bannerSpots.forEach(([x, side], i)=>{
+      const tex = canvasTex(1024, 96, ()=>{});
+      const mesh = new T.Mesh(new T.PlaneGeometry(16, 1.5), new T.MeshStandardMaterial({map:tex, roughness:0.85, emissive:0x111111}));
+      mesh.position.set(x, 1.35 + 0.42*2, side*(HW+9+0.85*2 - 0.05)); mesh.rotation.y = side>0 ? Math.PI : 0;
+      scene.add(mesh); world.banners.push(tex);
+    });
+    // Faisceaux des projecteurs (cônes additifs visibles de nuit)
+    world.beams = [];
+    const beamMat = new T.MeshBasicMaterial({color:0xfff2d0, transparent:true, opacity:0.035, blending:T.AdditiveBlending, depthWrite:false, side:T.DoubleSide, fog:false});
+    [[-HL-12,-HW-14],[HL+12,-HW-14],[HL+12,HW+14],[-HL-12,HW+14],[0,-HW-20],[0,HW+20]].forEach(([x,z])=>{
+      const len = 52, cone = new T.Mesh(new T.ConeGeometry(16, len, 24, 1, true), beamMat);
+      cone.geometry.translate(0, -len/2, 0);
+      cone.position.set(x, roofY+1, z);
+      cone.lookAt(x*0.35, 0, z*0.35); cone.rotateX(-Math.PI/2);
+      scene.add(cone); world.beams.push(cone);
+    });
+  }
+  function paintSideline(kUs, kThem, usName, oppName){
+    const cU = [new T.Color(kUs[0]), new T.Color(kUs[1]), new T.Color(kUs[2])], cT = [new T.Color(kThem[0]), new T.Color(kThem[1])];
+    for(let i=0;i<world.crowdFlags.count;i++){
+      const c = Math.random() < 0.72 ? cU[(Math.random()*3)|0] : cT[(Math.random()*2)|0];
+      world.crowdFlags.setColorAt(i, c);
+    }
+    world.crowdFlags.instanceColor.needsUpdate = true;
+    const texts = [`ALLEZ ${usName.toUpperCase()} !`, `FIERS D'ÊTRE ${usName.toUpperCase()}`, `ICI C'EST CHEZ NOUS`, `${oppName.toUpperCase()} ON VOUS ATTEND`, `PLUS QU'UN MATCH`, `ENSEMBLE JUSQU'AU BOUT`];
+    world.banners.forEach((tex, i)=>{
+      const g = tex.userData.ctx, w = 1024, h = 96;
+      const bg = i===3 ? kThem[0] : (i%2 ? "#ffffff" : kUs[0]), fgc = i===3 ? kThem[3]||"#fff" : (i%2 ? kUs[0] : "#ffffff");
+      g.fillStyle = bg; g.fillRect(0,0,w,h);
+      g.fillStyle = kUs[2]; g.fillRect(0,0,w,8); g.fillRect(0,h-8,w,8);
+      g.fillStyle = fgc; g.font = "bold 66px 'Bebas Neue', sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(texts[i % texts.length], w/2, h/2+3, w-40);
+      tex.needsUpdate = true;
+    });
+  }
+  function updateSideline(t, dt){
+    // drapeaux qui flottent
+    const d = _dummy;
+    world.flagSpots.forEach((f,i)=>{
+      d.position.set(f.x, f.y + Math.max(0, Math.sin(t*f.sp*0.5 + f.ph))*0.25*world.excite, f.z);
+      d.rotation.set(Math.sin(t*f.sp + f.ph)*0.35, f.ry + Math.sin(t*f.sp*0.7 + f.ph)*0.5, 0);
+      d.updateMatrix(); world.crowdFlags.setMatrixAt(i, d.matrix);
+    });
+    world.crowdFlags.instanceMatrix.needsUpdate = true;
+    // flashs des photographes : plus nombreux quand le ballon approche de leur but
+    const bx = world.ball.position.x;
+    world.flashes.forEach(f=>{
+      if(f.t > 0){ f.t -= dt; f.sp.material.opacity = Math.max(0, f.t/0.12); return; }
+      const near = clamp((bx*f.side - 20)/30, 0, 1);
+      if(Math.random() < dt*(0.15 + near*2.2 + world.goalPulse*6)){ f.t = 0.12; f.sp.material.opacity = 1; }
+    });
   }
 
   function buildGoal(side){
@@ -737,7 +840,15 @@
   const SHARED = {};
   function sharedGeos(){
     if(SHARED.ok) return SHARED;
-    SHARED.torso = new T.CapsuleGeometry(0.19, 0.26, 4, 10); SHARED.torso.scale(1.1, 1, 0.68);
+    // v49 : torse sculpté (taille fine, poitrine et épaules larges) au lieu d'une capsule
+    const prof = [[0.001,-0.33],[0.15,-0.32],[0.165,-0.2],[0.175,-0.08],[0.2,0.06],[0.222,0.17],[0.226,0.24],[0.2,0.3],[0.14,0.34],[0.06,0.36],[0.001,0.365]]
+      .map(([r,y])=> new T.Vector2(r, y));
+    SHARED.torso = new T.LatheGeometry(prof, 16); SHARED.torso.scale(1.1, 1, 0.66); SHARED.torso.computeVertexNormals();
+    SHARED.collar = new T.TorusGeometry(0.062, 0.016, 6, 14); SHARED.collar.rotateX(Math.PI/2);
+    SHARED.delt = new T.SphereGeometry(0.075, 10, 8);
+    SHARED.afro = new T.SphereGeometry(0.15, 12, 10); SHARED.afro.scale(1, 0.92, 1);
+    SHARED.buzz = new T.SphereGeometry(0.119, 14, 8, 0, Math.PI*2, 0, Math.PI*0.5);
+    SHARED.tail = new T.CapsuleGeometry(0.035, 0.12, 3, 6);
     SHARED.pelvis = new T.CapsuleGeometry(0.17, 0.1, 4, 10); SHARED.pelvis.scale(1.12,1,0.75);
     SHARED.head = new T.SphereGeometry(0.115, 16, 12); SHARED.head.scale(0.92,1.08,1);
     SHARED.hair = new T.SphereGeometry(0.122, 14, 8, 0, Math.PI*2, 0, Math.PI*0.55); SHARED.hair.scale(0.94,1.05,1.04);
@@ -776,13 +887,21 @@
     const neck = new T.Mesh(G.neck, skin); neck.position.y = 0.53; spine.add(neck);
     const headG = new T.Group(); headG.position.y = 0.65; spine.add(headG);
     const head = new T.Mesh(G.head, skin); headG.add(head);
-    if(opts.hairStyle !== 3){ const h = new T.Mesh(G.hair, hair); h.position.y = 0.02; h.rotation.x = -0.25; headG.add(h); }
+    // coiffures : courte, rasée, afro, crâne rasé, queue de cheval
+    const hs = opts.hairStyle;
+    if(hs === 0 || hs === undefined){ const h = new T.Mesh(G.hair, hair); h.position.y = 0.02; h.rotation.x = -0.25; headG.add(h); }
+    else if(hs === 1){ const h = new T.Mesh(G.buzz, hair); h.position.y = 0.01; h.rotation.x = -0.15; headG.add(h); }
+    else if(hs === 2){ const h = new T.Mesh(G.afro, hair); h.position.set(0, 0.06, -0.02); headG.add(h); }
+    else if(hs === 4){ const h = new T.Mesh(G.hair, hair); h.position.y = 0.02; h.rotation.x = -0.25; headG.add(h);
+      const tl = new T.Mesh(G.tail, hair); tl.position.set(0, -0.02, -0.13); tl.rotation.x = 0.5; headG.add(tl); }
+    const col = new T.Mesh(G.collar, opts.collar ? mat(opts.collar) : shirt); col.position.y = 0.5; spine.add(col);
     if(opts.number!==undefined){
       const np = new T.Mesh(G.numPlane, numMat(opts.number, opts.numColor||"#ffffff", opts.shirt, opts.backName));
       np.position.set(0, 0.3, -0.136); np.rotation.y = Math.PI; spine.add(np);
     }
     const mkArm = (s)=>{
       const sh = new T.Group(); sh.position.set(s*0.26, 0.45, 0); spine.add(sh);
+      const dl = new T.Mesh(G.delt, shirt); dl.position.y = -0.02; sh.add(dl);
       const ua = new T.Mesh(G.upperArm, opts.longSleeves ? shirt : shirt); sh.add(ua);
       const el = new T.Group(); el.position.y = -0.3; sh.add(el);
       const fa = new T.Mesh(G.foreArm, opts.longSleeves ? shirt : skin); el.add(fa);
@@ -814,9 +933,9 @@
     const sp = h.speed;
     const run = clamp(sp/7, 0, 1);
     const walk = clamp(sp/1.8, 0, 1);
-    h.phase += dt * (2.2 + sp*1.45);
+    h.phase += dt * (2.2 + sp*1.45) * (h.backward ? -0.85 : 1);   // pas chassés / course arrière
     const ph = h.phase;
-    const amp = 0.25*walk + 0.65*run;
+    const amp = (0.25*walk + 0.65*run) * (h.backward ? 0.7 : 1);
     const s1 = Math.sin(ph), s2 = Math.sin(ph+Math.PI);
     h.legL.hp.rotation.x = s1*amp;
     h.legR.hp.rotation.x = s2*amp;
@@ -858,6 +977,14 @@
     // inclinaison dans les virages (vitesse angulaire) et regard qui suit le ballon
     h.body.rotation.z += clamp(-(h.turnRate||0)*0.06*clamp(sp/6,0,1), -0.3, 0.3);
     if(h.lookYaw !== undefined){ h.headG.rotation.y = lerp(h.headG.rotation.y, h.lookYaw, Math.min(1, dt*8)); h.headG.rotation.x = lerp(h.headG.rotation.x, h.lookPitch||0, Math.min(1, dt*6)); }
+    // gardien "sur ses appuis" avant une frappe
+    if(h.setT > 0){ h.body.position.y -= 0.12*Math.min(1,h.setT*3); h.spine.rotation.x += 0.35; h.legL.kn.rotation.x += 0.55; h.legR.kn.rotation.x += 0.55;
+      h.legL.hp.rotation.x -= 0.3; h.legR.hp.rotation.x -= 0.3; h.armL.sh.rotation.z = 0.7; h.armR.sh.rotation.z = -0.7; h.setT = Math.max(0, h.setT - dt); }
+    // à l'arrêt : léger balancement ; loin du ballon : mains sur les hanches
+    if(sp < 0.3 && !h.isCoach && h.kick <= 0 && h.celebrate <= 0 && h.dive <= 0){
+      h.body.rotation.z += Math.sin(t*0.9 + h.jumpPh)*0.025;
+      if(h.restPose){ h.armL.sh.rotation.z = 0.5; h.armR.sh.rotation.z = -0.5; h.armL.el.rotation.x = -1.7; h.armR.el.rotation.x = -1.7; h.armL.sh.rotation.x = 0.35; h.armR.sh.rotation.x = 0.35; }
+    }
     // défenseur éliminé : déséquilibre
     if(h.stun > 0){ h.body.rotation.x = -0.32*Math.min(1, h.stun); h.body.rotation.z += Math.sin(t*9)*0.08*h.stun; }
     // célébration : bras en l'air + sauts
@@ -895,7 +1022,7 @@
         shirt:k[0], shirtMat: isGK ? null : shirtMat(kit), shorts:k[1], socks:k[2], numColor:k[3],
         skin:SKIN_TONES[seed%SKIN_TONES.length], hair:HAIR_TONES[(seed>>>3)%HAIR_TONES.length], hairStyle:(seed>>>6)%5,
         boot:[0x111111,0xf4f4f4,0xff3d7f,0x38e1ff,0xd4ff00][(seed>>>9)%5],
-        number: isGK ? 1 : (i===0?1:i+1), backName: backName(fullName), gloves: isGK ? 0xf8f8f8 : null, longSleeves:isGK,
+        collar: k[3], number: isGK ? 1 : (i===0?1:i+1), backName: backName(fullName), gloves: isGK ? 0xf8f8f8 : null, longSleeves:isGK,
         scale: 0.94 + ((seed>>>12)%13)/100,
       });
       h.side = side; h.idx = i; h.isGK = isGK;
@@ -914,6 +1041,14 @@
     const coach = makeHumanoid({shirt:"#1a1f2b", shorts:"#1a1f2b", socks:"#1a1f2b", skin:SKIN_TONES[0], hair:HAIR_TONES[4], longSleeves:true, boot:0x0a0a0a});
     coach.isCoach = true; scene.add(coach.root); teams.all.push(coach); teams.coach = coach;
     paintCrowd(kits.us, kits.them);
+    paintSideline(kits.us, kits.them, m.ctx==="club" ? clubName() : "les Bleus", String(m.opp||""));
+    // remplaçants à l'échauffement (chasubles fluo) derrière la ligne de touche
+    teams.subs = [];
+    for(let k=0;k<3;k++){
+      const sub = makeHumanoid({shirt:"#ff6a00", shorts:kits.us[1], socks:kits.us[2], skin:SKIN_TONES[(k*2+1)%SKIN_TONES.length], hair:HAIR_TONES[k], scale:0.98});
+      sub.isSub = true; sub.subPh = k*1.7; scene.add(sub.root); teams.all.push(sub); teams.subs.push(sub);
+      sub.pos.set(-20 + k*2, 0, HW+3.2); sub.tgt.copy(sub.pos); sub.smoothTgt.copy(sub.pos);
+    }
     // positions initiales = positions courantes du match
     syncTargets(m, true);
     recInit();
@@ -940,6 +1075,39 @@
     };
     teams.us.forEach((h,i)=> set(h, m.pos.us[i]));
     teams.them.forEach((h,i)=> set(h, m.pos.them[i]));
+    // v49 : IA COLLECTIVE — bloc défensif aligné et compact, soutien et appels de l'équipe qui attaque.
+    // On mélange la position "tactique" voulue par le moteur de match (m.pos) avec ces comportements.
+    const cc = BS.carrier;
+    if(cc && !cc.isGK){
+      const dirA = attackDir(cc.side), atk = teamArr(cc.side), dfn = teamArr(cc.side==="us"?"them":"us");
+      const bz0 = cc.pos.z;
+      // ligne défensive : ~13 m derrière le ballon, jamais dans la surface de son propre gardien
+      const lineX = clamp(cc.pos.x + dirA*13, -HL+7, HL-7);
+      for(let i=1;i<=10;i++){
+        const h = dfn[i]; if(!h) continue;
+        let x, z;
+        if(i <= 4){ x = lineX; z = h.tgt.z*0.8 + bz0*0.28; }                          // défenseurs : alignés, coulissent côté ballon
+        else if(i <= 8){ x = lerp(h.tgt.x, cc.pos.x + dirA*6.5, 0.55); z = h.tgt.z*0.7 + bz0*0.35; }  // milieux : entre ballon et but
+        else { x = lerp(h.tgt.x, cc.pos.x - dirA*4, 0.35); z = h.tgt.z*0.85 + bz0*0.15; }           // attaquants : restent pour la contre-attaque
+        h.tgt.x = lerp(h.tgt.x, clamp(x, -HL+2, HL-2), 0.7); h.tgt.z = lerp(h.tgt.z, clamp(z, -HW+2, HW-2), 0.7);
+      }
+      // équipe qui attaque : deux soutiens proches (angles de passe), appels en profondeur des attaquants
+      const mates = atk.filter((h,i)=> i>0 && h!==cc).sort((a,b)=> Math.hypot(a.pos.x-cc.pos.x,a.pos.z-cc.pos.z) - Math.hypot(b.pos.x-cc.pos.x,b.pos.z-cc.pos.z));
+      mates.slice(0,2).forEach((h,k)=>{
+        const sideZ = (k===0 ? 1 : -1) * (h.pos.z > cc.pos.z ? 1 : -1);
+        h.tgt.x = lerp(h.tgt.x, cc.pos.x + dirA*(k===0 ? 4 : -3), 0.6);
+        h.tgt.z = lerp(h.tgt.z, clamp(cc.pos.z + sideZ*10, -HW+2, HW-2), 0.6);
+      });
+      [9,10].forEach(i=>{
+        const h = atk[i]; if(!h || h===cc) return;
+        if((cc.pos.x - (cc.side==="us" ? -HL : HL))*dirA > 30){           // ballon dans les 2/3 offensifs : appel
+          const onside = lineX - dirA*0.8;                                  // reste en position licite (hors-jeu)
+          h.tgt.x = dirA > 0 ? Math.min(cc.pos.x + 18, onside) : Math.max(cc.pos.x - 18, onside);
+        }
+      });
+      // largeur : les latéraux de l'équipe qui attaque restent écartés
+      [1,4].forEach(i=>{ const h = atk[i]; if(h && h!==cc) h.tgt.z = lerp(h.tgt.z, (h.tgt.z>0?1:-1)*(HW-6), 0.4); });
+    }
     // v45 : le porteur conduit le ballon vers l'avant ; le défenseur le plus proche vient presser
     const c = BS.carrier;
     if(c && !BS.inHands && !c.isGK){
@@ -965,6 +1133,8 @@
     teams.linesmen[0].tgt.set(clamp(Math.min(bxw, -10), -HL, 0), 0, -HW-1.2);
     teams.linesmen[1].tgt.set(clamp(Math.max(bxw, 10), 0, HL), 0, HW+1.2);
     teams.coach.tgt.set(clamp(bxw*0.08-9, -14, -4), 0, HW+2.2);
+    // remplaçants : petites courses d'échauffement le long de la touche
+    (teams.subs||[]).forEach(sb=>{ const ph = clock.elapsedTime*0.18 + sb.subPh; sb.tgt.set(-32 + (Math.sin(ph)*0.5+0.5)*24, 0, HW+3.1 + Math.sin(ph*2.3)*0.4); });
     if(snap){ teams.ref.pos.copy(teams.ref.tgt); teams.linesmen.forEach(l=>l.pos.copy(l.tgt)); teams.coach.pos.copy(teams.coach.tgt); }
   }
 
@@ -1107,6 +1277,7 @@
         a.stage = 2; a.t = 0; return false;
       }
       if(a.stage === 3) return BS.mode !== "flight" || BS.flight.t > 0.75;   // la tête suit : pas de contrôle
+      if(BS.mode === "flight") faceTo(to, BS.pos.x, BS.pos.z, 0.15);       // le receveur s'ouvre vers le ballon
       if(BS.mode === "flight") return false;
       // contrôle : le receveur tend la jambe s'il est à portée
       if(BS.mode === "loose" && Math.hypot(to.pos.x-BS.pos.x, to.pos.z-BS.pos.z) < 1.7){ giveTo(to); return true; }
@@ -1163,6 +1334,7 @@
       if(a.stage === 0){
         if(!acquire(sh, a)) return false;
         a.stage = 1; a.t = 0; faceTo(sh, gs*HL, 0, 0.6); sh.kick = 1; sh.kickAmp = 1.45;
+        gk.setT = 0.7;
       }
       if(a.stage === 1){
         if(a.t < 0.26) return false;
@@ -1293,9 +1465,17 @@
       const dist = desired.length();
       let maxSp = h.isCoach ? 1.6 : (h.isGK ? (h.override ? 6.5 : 5) : (h.override ? 8.3 : (h===teams.carrier ? 7.6 : 7.2)));
       if(h.stun > 0){ maxSp *= 0.3; h.stun = Math.max(0, h.stun - dt); }
+      // v49 : loin de l'action on trottine, près du ballon on sprinte
+      if(!h.override && !h.isCoach && h !== teams.carrier){
+        const dB = Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z);
+        maxSp *= dB < 15 ? 1 : dB < 30 ? 0.72 : 0.5;
+      }
       const want = Math.min(maxSp, dist*1.6);
       if(dist>0.001) desired.multiplyScalar(want/dist);
-      h.vel.lerp(desired, damp(h.isCoach?2:4.5, dt));
+      // accélération physiquement limitée (~7 m/s²) : plus de démarrages instantanés
+      _v2.subVectors(desired, h.vel); const dv = _v2.length(), maxDv = (h.override ? 9 : 7)*dt;
+      if(dv > maxDv) _v2.multiplyScalar(maxDv/dv);
+      h.vel.add(_v2);
       if(h.celebrate>0.3 && h.runTo){ const d2 = _v2.subVectors(h.runTo, h.pos); d2.y=0; const l=d2.length(); if(l>1){ d2.multiplyScalar(Math.min(8.5,l*2)/l); h.vel.lerp(d2, damp(5,dt)); } }
       h.pos.addScaledVector(h.vel, dt);
       h.speed = h.vel.length();
@@ -1304,11 +1484,14 @@
       if(h.faceT > 0 && h.faceTo){ face = Math.atan2(h.faceTo.x-h.pos.x, h.faceTo.z-h.pos.z); h.faceT -= dt; }
       else if(cur.showcase && !h.isCoach) face = 0;
       else if(h.isCoach) face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
+      else if(h.speed > 1.2 && h.speed < 5.5 && teams.carrier && h.side !== teams.carrier.side && !h.override && !h.isRef && !h.isLinesman
+              && Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z) < 18){ face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z); }   // défenseur : recule face au jeu
       else if(h.speed > 1.2) face = Math.atan2(h.vel.x, h.vel.z);
       else face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
       let dh = face - h.heading; while(dh>Math.PI) dh-=Math.PI*2; while(dh<-Math.PI) dh+=Math.PI*2;
       const dHead = dh*damp(7,dt);
       h.heading += dHead; h.turnRate = dHead/Math.max(dt,1e-3);
+      h.backward = h.speed > 0.8 && (h.vel.x*Math.sin(h.heading) + h.vel.z*Math.cos(h.heading))/h.speed < -0.3;
       // la tête suit le ballon (dans la limite d'une rotation naturelle du cou)
       if(!h.isCoach){
         let ly = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z) - h.heading; while(ly>Math.PI) ly-=Math.PI*2; while(ly<-Math.PI) ly+=Math.PI*2;
@@ -1324,6 +1507,7 @@
         h.armL.sh.rotation.x = -0.2;
       }
       if(h.isLinesman){ h.armR.sh.rotation.x = -0.15; }
+      h.restPose = !h.isGK && !h.isRef && !h.isLinesman && Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z) > 38;
       if(h === BS.carrier && BS.inHands){ h.armL.sh.rotation.x = -1.2; h.armR.sh.rotation.x = -1.2; h.armL.sh.rotation.z = 0.25; h.armR.sh.rotation.z = -0.25; }
       else if(h.isGK && h.dive<=0 && h.celebrate<=0){
         // posture d'attente du gardien quand le ballon approche
@@ -1385,7 +1569,8 @@
       p.set(-side*(HL+24), 22, b.z*0.3); l.set(b.x*0.6+side*10, 0, b.z*0.6); fov = narrow?52:40;
     } else {
       camState.orbit += dt*0.07;
-      p.set(Math.cos(camState.orbit)*110, 58, Math.sin(camState.orbit)*90); l.set(b.x*0.3, 0, b.z*0.3); fov = 42;
+      // drone dans l'ouverture du toit (au-dessus du toit, celui-ci masquait le terrain)
+      p.set(Math.cos(camState.orbit)*56, 44, Math.sin(camState.orbit)*38); l.set(b.x*0.4, 0, b.z*0.4); fov = narrow ? 60 : 50;
     }
     if(camState.snap){ camState.pos.copy(p); camState.look.copy(l); camState.fov = fov; camState.snap = false; }
     // changement de plan franc (comme en régie) plutôt qu'un travelling qui traverserait les tribunes
@@ -1552,10 +1737,13 @@
     const amb = clamp(0.25 + (m.us-m.them)*0.12 + (world.goalPulse*0.8), 0.12, 1);
     world.excite = lerp(world.excite, amb, damp(1.5,dt));
     world.goalPulse = Math.max(0, world.goalPulse - dt*0.25);
+    // tension sonore : le murmure du stade enfle quand le ballon approche d'un but
+    if(!m.showcase && (cur.tensT = (cur.tensT||0) + dt) > 0.4){ cur.tensT = 0; const bx = Math.abs(world.ball.position.x); try{ if(typeof SFX!=="undefined" && SFX.setTension) SFX.setTension(clamp((bx-22)/28, 0, 1)); }catch(e){} }
     const cu = world.crowd.material.uniforms;
     cu.time.value = t; cu.excite.value = world.excite; cu.flash.value = Math.min(1, world.goalPulse*1.2 + 0.08);
     world.adTex.offset.x = (t*0.025)%1;
     world.ringTex.offset.x = (-t*0.03)%1;
+    if(!m.showcase) updateSideline(t, dt);
     world.flags.forEach((f,i)=>{ f.rotation.y = Math.sin(t*(cur.windy?6:2.5)+i)*(cur.windy?0.9:0.35) + (cur.windy?0.6:0); });
     world.flares.forEach((f,i)=>{ const s = 8.5 + Math.sin(t*0.8+i)*0.4; f.scale.set(s,s,1); });
     // filets qui gonflent après un but
@@ -1746,6 +1934,7 @@
       scene.background.set(0x8fb6e8); scene.fog.color.set(0xa8c4e6);
       world.key.intensity = 3.0; world.key.color.set(0xfff1d6); world.hemi.intensity = 0.9;
       world.flares.forEach(f=> f.visible=false);
+      (world.beams||[]).forEach(b=> b.visible=false);
       world.crowd.material.uniforms.light.value = 1.05;
       renderer.toneMappingExposure = 1.0;
     } else {
@@ -1755,6 +1944,7 @@
       scene.fog.near = gloomy ? 90 : 180;
       world.key.intensity = 2.1; world.key.color.set(0xfff4e0); world.hemi.intensity = 0.55;
       world.flares.forEach(f=> f.visible=true);
+      (world.beams||[]).forEach(b=> b.visible=true);
       world.crowd.material.uniforms.light.value = 0.92;
       renderer.toneMappingExposure = 1.05;
     }
