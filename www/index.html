@@ -779,6 +779,32 @@ matchs plus réalistes, IA/mouvements des joueurs, design et mouvement ballon-pe
 - PERSONNAGES : torse sculpté (LatheGeometry), col de la couleur du numéro, épaules arrondies,
   coiffures variées (courte, rasée, afro, crâne rasé, queue de cheval). Caméra Drone ramenée
   dans l'ouverture du toit (le toit masquait le terrain).
+
+v50 — Demandes de Julien : "pouvoir jouer dans les matchs, en 1re personne, toucher de balle encore
+plus précis" puis "je veux jouer le match complet et en 1re personne dans le stade". [FAIT] :
+- MATCH JOUÉ (bouton "🎮 Jouer le match (1re personne)" à côté du coup d'envoi, sélection ET club) :
+  startPlayedMatch() pose m.played=true puis lance startMatch/startClubLiveMatch ; tickMatch() ne fait
+  plus rien pour un match joué. Le stade 3D simule TOUT le match en temps réel (module FM dans
+  stade3d.js) : horloge accélérée selon le rythme (Rapide ~6 min, Normal ~10, Réaliste ~16), mi-temps,
+  temps additionnel, IA du porteur (frappe / passe au partenaire démarqué / conduite en évitant le
+  pressing), bloc collectif, pressing et couverture, tacles selon attaque/défense des joueurs,
+  interceptions physiques, gardiens, touches / corners / sorties de but, engagements.
+  playedMatchHooks(m) reporte minutes, passes, tirs, corners, possession, buts (buteur + passeur),
+  mi-temps et fin dans l'objet match ; la fin passe par showFinalButton -> finishMatch comme d'habitude
+  (tirs au but si match à élimination à égalité). Sans WebGL : fallbackPlayed() repasse en simulation.
+- CONTRÔLE (couche IM) : joystick (avancer/tourner, poussé à fond = sprint), avec ballon PASSE /
+  TIR maintenu (jauge de puissance, visée = orientation du joueur + joystick) / DRIBBLE (crochet,
+  passement, roulette selon les stats) ; sans ballon CHANGER de joueur / TACLE. Bascule automatique
+  sur le porteur quand on récupère, et sur le plus proche si on est loin de l'action. Vues : 1re
+  personne (tête du joueur masquée), 3e personne, TV (préférence "sel-imview"). Pause. Clavier sur
+  ordinateur : flèches/ZQSD, Espace, J, K, V, P. Si on lâche les commandes, l'IA replace le joueur
+  (et joue le ballon au bout de 2,5 s).
+- TOUCHER DE BALLE : la touche de conduite tombe sur la foulée (quand une jambe passe devant), avec
+  le pied qui avance ; poursuite d'un ballon libre en visant sa position future ; récupération dans
+  un rayon d'environ 1 m ; tirs visés (a.aimZ / a.aimY dans l'action "shot").
+ATTENTION si vous reprenez ce chantier : dans un match joué, l'équilibre ne vient plus des probabilités
+de tickMatch mais de l'IA 3D (fmCarrierAI, fmDefend, fmShoot). Stade3D._fmJump(sec) et
+Stade3D._fmTestGoal(side) servent aux tests automatisés.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1889,6 +1915,36 @@ body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .inf
 .s3d-replaying .s3d-bug, .s3d-replaying .s3d-tools, .s3d-replaying .s3d-live, .s3d-replaying .s3d-ticker, .s3d-replaying .s3d-carrier{opacity:0; pointer-events:none;}
 .s3d-replaying::before, .s3d-replaying::after{content:''; display:block !important; position:absolute; left:0; right:0; height:9%; background:#000; z-index:5;}
 .s3d-replaying::before{top:0;} .s3d-replaying::after{bottom:0; top:auto; width:auto; margin:0; border:none; border-radius:0;}
+
+/* =====================================================================================
+   v50 — MATCH JOUÉ : commandes tactiles (joystick, PASSE / TIR / DRIBBLE) par-dessus la 3D
+   ===================================================================================== */
+.btn-play{width:100%; margin-top:10px; background:linear-gradient(135deg,#ff3b4e,#c4162a) !important; color:#fff !important;
+  box-shadow:0 8px 22px rgba(255,59,78,0.35) !important; font-size:16px;}
+.s3d-im .s3d-tools, .s3d-im .s3d-carrier{display:none !important;}
+.s3d-im .s3d-ticker{top:calc(52px + env(safe-area-inset-top)); bottom:auto !important; left:12px; right:12px; font-size:12.5px; opacity:.92;}
+.im-ui{position:absolute; inset:0; z-index:9; pointer-events:none; font-family:'Barlow Condensed',sans-serif; user-select:none; -webkit-user-select:none;}
+.im-top{position:absolute; top:calc(10px + env(safe-area-inset-top)); right:12px; display:flex; gap:6px; align-items:center; pointer-events:auto;}
+.im-badge{background:rgba(255,59,78,0.9); color:#fff; font-weight:700; padding:5px 10px; border-radius:10px; font-size:13px; letter-spacing:.04em; max-width:42vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.im-small{background:rgba(6,10,22,0.75); color:#fff; border:1px solid rgba(255,255,255,0.25); border-radius:10px; padding:5px 9px; font-family:inherit; font-weight:700; font-size:13px;}
+.im-joy{position:absolute; left:calc(18px + env(safe-area-inset-left)); bottom:calc(26px + env(safe-area-inset-bottom)); width:132px; height:132px; border-radius:50%;
+  background:radial-gradient(circle, rgba(255,255,255,0.10), rgba(255,255,255,0.04)); border:2px solid rgba(255,255,255,0.28); pointer-events:auto; touch-action:none;}
+.im-knob{position:absolute; left:50%; top:50%; width:58px; height:58px; margin:-29px 0 0 -29px; border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #fff, #c9d3e6); box-shadow:0 4px 12px rgba(0,0,0,0.5); transition:transform .05s;}
+.im-btns{position:absolute; right:calc(14px + env(safe-area-inset-right)); bottom:calc(24px + env(safe-area-inset-bottom)); width:170px; height:150px; pointer-events:none;}
+.im-btn{position:absolute; border-radius:50%; border:2px solid rgba(255,255,255,0.55); color:#fff; font-family:inherit; font-weight:700; letter-spacing:.04em;
+  pointer-events:auto; touch-action:none; box-shadow:0 6px 16px rgba(0,0,0,0.45); text-shadow:0 1px 3px rgba(0,0,0,0.6);}
+.im-btn:active{transform:scale(0.92); filter:brightness(1.2);}
+.im-shoot{right:0; bottom:0; width:84px; height:84px; font-size:18px; background:radial-gradient(circle at 35% 30%, #ff6a78, #c4162a);}
+.im-pass{right:92px; bottom:6px; width:66px; height:66px; font-size:14px; background:radial-gradient(circle at 35% 30%, #6aa0ff, #1f4fc7);}
+.im-skill{right:14px; bottom:94px; width:56px; height:56px; font-size:11px; background:radial-gradient(circle at 35% 30%, #4fe39a, #169454);}
+.im-power{position:absolute; left:12px; right:12px; bottom:14px; height:5px; border-radius:3px; background:rgba(0,0,0,0.4); overflow:hidden;}
+.im-power i{display:block; height:100%; width:0; background:linear-gradient(90deg,#ffe066,#ff8a00,#ff2a2a);}
+.im-paused{display:none; position:absolute; inset:0; background:rgba(0,0,0,0.55); color:#fff; font-family:'Bebas Neue',sans-serif; font-size:40px;
+  letter-spacing:.1em; align-items:center; justify-content:center; flex-direction:column; pointer-events:none;}
+.im-paused small{font-family:'Barlow',sans-serif; font-size:13px; letter-spacing:0; opacity:.8;}
+.im-ui.paused .im-paused{display:flex;}
+.s3d-replaying .im-ui{display:none;}
 </style>
 </head>
 <body>
@@ -5968,6 +6024,7 @@ function renderMatchTab(el){
     <button class="btn btn-primary" id="kickoffBtn" ${filledCount<11?"disabled":""}>
       ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶"}
     </button>
+    ${(window.Stade3D && Stade3D.supported()) ? `<button class="btn btn-play" id="playMatchBtn" ${filledCount<11?"disabled":""}>🎮 Jouer le match (1re personne)</button>` : ""}
   `;
   mountMatchHero(el, null, next);
   el.querySelector("#openTactics").onclick = openTacticsSheet;
@@ -6009,6 +6066,8 @@ function renderMatchTab(el){
   groups.querySelectorAll(".slot-pick").forEach(s=> s.onclick = ()=> openSlotPicker(s.dataset.slot, s.dataset.pos));
   const kickoff = el.querySelector("#kickoffBtn");
   if(filledCount>=11) kickoff.onclick = ()=> startMatch(next);
+  const playBtn = el.querySelector("#playMatchBtn");
+  if(playBtn && filledCount>=11) playBtn.onclick = ()=> startPlayedMatch(next, null);
 }
 
 /* ---------------- COMPOSITIONS ENREGISTRÉES ---------------- */
@@ -7363,6 +7422,7 @@ function isKnockoutMatch(m){
   return koOrder().indexOf(m.type) !== -1;
 }
 async function tickMatch(matchObj){
+  if(matchObj.played) return;   // v50 : "Match joué" — c'est le stade 3D qui simule le match en temps réel
   const isKO = isKnockoutMatch(matchObj);
   const regEnd = 90;
   // v36 : la prolongation n'est plus 2x15 minutes fixes suivies de tirs au but si toujours à
@@ -7994,8 +8054,12 @@ function buildLiveMatch(el, m){
 // 2D (bouton "2D" du HUD 3D, préférence en localStorage "sel-view3d"), on garde le terrain 2D
 // historique avec un petit bouton pour repasser en 3D.
 function mountStade3D(wrap, m){
-  if(!wrap || !window.Stade3D || !Stade3D.supported()) return;
-  if(Stade3D.isEnabled() && Stade3D.mount(wrap, m)) return;
+  if(!wrap || !window.Stade3D || !Stade3D.supported()){ fallbackPlayed(m); return; }
+  if((Stade3D.isEnabled() || m.played) && Stade3D.mount(wrap, m)){
+    if(m.played && !m.finalWhistlePlayed) Stade3D.startFullMatch(m, playedMatchHooks(m));
+    return;
+  }
+  fallbackPlayed(m);
   const b = document.createElement("button");
   b.className = "s3d-enable"; b.textContent = "🎥 Vue 3D";
   b.onclick = ()=>{ Stade3D.setEnabled(true); render(); };
@@ -8009,6 +8073,52 @@ function renderOppLineupCard(next){
     <div class="opp-lineup-head"><span>📋 Composition probable</span><b>${next.opp}</b></div>
     ${lines.map(([lab,idx])=>`<div class="opp-line"><span class="opp-pos">${lab}</span><span class="opp-names">${idx.map(i=>`<span>${names[i]}</span>`).join("")}</span></div>`).join("")}
   </div>`;
+}
+// v50 : MATCH JOUÉ — l'utilisateur joue le match entier dans le stade 3D (cf. FM dans stade3d.js).
+// Ces crochets répercutent ce qui se passe sur la pelouse dans l'objet match du jeu.
+function fallbackPlayed(m){
+  if(m && m.played && !m.finalWhistlePlayed){ m.played = false; setTimeout(()=> tickMatch(m), 600); }   // pas de 3D : match simulé classique
+}
+function startPlayedMatch(next, ctx){
+  next.played = true;
+  try{ localStorage.setItem("sel-view3d", "1"); }catch(e){}
+  if(ctx === "club") startClubLiveMatch(next); else startMatch(next);
+}
+function playedMatchHooks(m){
+  const live = ()=> isLiveScreenActive(m);
+  return {
+    minute(min){ m.minute = min; if(live()){ updateScoreboardDOM(m); COMMENTATEUR.filler(m); } if(min % 5 === 0) saveGame(); },
+    event(text, important){ pushEntry(m, {min:m.minute, goal:false, text}); },
+    pass(side){ countPass(m, side); },
+    poss(pct){ m.stats.possUs = pct; m.stats.possThem = 100-pct; m.stats._pf = pct; },
+    corner(side){ if(side==="us") m.stats.corUs++; else m.stats.corThem++; },
+    shot(side, onTarget){ if(side==="us"){ m.stats.tirsUs++; if(onTarget) m.stats.cadresUs++; } else { m.stats.tirsThem++; if(onTarget) m.stats.cadresThem++; } },
+    goal(side, idx, assist){
+      const ours = side === "us";
+      const nameOf = (i)=> playerNameAt(m, side, i);
+      if(ours){ m.us++; const sc = m.usOrder[idx]; if(sc) sc.buts = (sc.buts||0) + 1; } else m.them++;
+      const a = (assist !== null && assist !== undefined && assist !== idx) ? ` (passe décisive : ${nameOf(assist)})` : "";
+      pushEntry(m, {min:m.minute, goal:true, text: ours ? `⚽ BUT ! ${nameOf(idx)} trompe le gardien !${a}` : `⚽ But encaissé — ${nameOf(idx)} (${m.opp}) marque.${a}`});
+      flashResult(m, side, idx);
+      updateScoreboardDOM(m); saveGame();
+    },
+    halftime(){
+      m.halftimeDone = true; m.minute = 45; SFX.whistle(false);
+      pushEntry(m, {min:45, goal:false, text:`⏸️ Mi-temps : ${m.us} - ${m.them}.`});
+      COMMENTATEUR.say(`C'est la mi-temps ! ${m.us} à ${m.them}.`, 3);
+      saveGame();
+    },
+    end(){
+      m.minute = 90; m.finalWhistlePlayed = true;
+      if(isKnockoutMatch(m) && m.us === m.them) m.extraTime = true;   // séance de tirs au but
+      SFX.whistle(true); SFX.stopCrowdLoop(); stopAmbientMotion(m);
+      pushEntry(m, {min:90, goal:false, text:`🔔 Coup de sifflet final : ${m.us} - ${m.them}.`});
+      COMMENTATEUR.say(`C'est terminé ! ${m.us} à ${m.them}.`, 4);
+      updateScoreboardDOM(m);
+      if(live()) showFinalButton(m);
+      saveGame();
+    },
+  };
 }
 function mountMatchHero(el, ctx, next){
   const hero = el.querySelector("#s3dHero");
@@ -8563,6 +8673,7 @@ function renderClubMatchTab(el){
         <button class="btn-soin" id="clubAutoFillBtn">⚡ Composition auto</button>
       </div>
       <div id="clubGroups"></div>
+      ${(window.Stade3D && Stade3D.supported()) ? `<button class="btn btn-play" id="clubPlayMatchBtn" ${filledCount<11?"disabled":""}>🎮 Jouer le match (1re personne)</button>` : ""}
       <button class="btn btn-primary" id="clubKickoffBtn" ${filledCount<11?"disabled":""}>
         ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶"}
       </button>
@@ -8591,6 +8702,8 @@ function renderClubMatchTab(el){
     groups.querySelectorAll(".slot-pick").forEach(s=> s.onclick = ()=> openClubSlotPicker(s.dataset.slot, s.dataset.pos));
     const kickoff = el.querySelector("#clubKickoffBtn");
     if(filledCount>=11) kickoff.onclick = ()=> startClubLiveMatch(next);
+    const clubPlay = el.querySelector("#clubPlayMatchBtn");
+    if(clubPlay && filledCount>=11) clubPlay.onclick = ()=> startPlayedMatch(next, "club");
     el.querySelector("#simClubMatchBtn").onclick = ()=>{ simulateClubMatch(); render(); };
   }
 
