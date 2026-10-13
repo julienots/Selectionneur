@@ -1690,6 +1690,7 @@
     const n = REC.count, first = REC.times[(REC.head - n + REC.cap) % REC.cap];
     RP.t0 = Math.max(first, RP.goalT - 4.0); RP.t1 = RP.goalT + 0.7; RP.cur = RP.t0;   // ≈ 8 s à 0,6x
     RP.on = true; RP.pendingAt = 0; RP.angle = Math.random() < 0.5 ? 0 : 1;
+    if(IM.ctrl) IM.ctrl.spine.visible = true;
     if(cur && cur.container) cur.container.classList.add("s3d-replaying");
     camState.lastMode = "replay";
   }
@@ -1697,6 +1698,7 @@
     if(!RP.on) return;
     recApply(REC.snap, 0, REC.snap, 0, 0);
     RP.on = false;
+    if(IM.on && IM.ctrl) IM.ctrl.spine.visible = IM.view !== "fp";
     if(cur && cur.container) cur.container.classList.remove("s3d-replaying");
     camState.lastMode = "fin-replay";
     lastGoalAt = clock.elapsedTime - 1.5;   // le coup d'envoi peut suivre rapidement
@@ -1725,8 +1727,8 @@
   S.interactiveActive = ()=> IM.on;
   function imSetCtrl(h){
     if(!h) return;
-    if(IM.ctrl && IM.ctrl !== h){ IM.ctrl.headG.visible = true; IM.ctrl.ctrlVel = null; }
-    IM.ctrl = h; h.override = null; h.headG.visible = IM.view !== "fp";
+    if(IM.ctrl && IM.ctrl !== h){ IM.ctrl.spine.visible = true; IM.ctrl.ctrlVel = null; }
+    IM.ctrl = h; h.override = null; h.spine.visible = IM.view !== "fp";
     if(IM.dom){ const n = IM.dom.querySelector(".im-who"); if(n) n.textContent = h.backLabel || ""; }
   }
   function userHasBall(){ return IM.ctrl && BS.carrier === IM.ctrl && !BS.inHands; }
@@ -1799,8 +1801,9 @@
     let p, l, fov;
     if(IM.view === "fp"){
       const has = BS.carrier === c;
-      p = _g.set(c.pos.x + fx*0.12, 1.66*(c.root.scale.y||1) + c.body.position.y, c.pos.z + fz*0.12);
-      l = _f.set(c.pos.x + fx*7, has ? -1.4 : 0.6, c.pos.z + fz*7);
+      // vue à la 1re personne : le haut du corps du joueur est masqué (on voit ses jambes et le ballon)
+      p = _g.set(c.pos.x + fx*0.08, 1.66*(c.root.scale.y||1) + c.body.position.y, c.pos.z + fz*0.08);
+      l = _f.set(c.pos.x + fx*7, has ? -2.7 : 0.2, c.pos.z + fz*7);
       fov = camera.aspect < 1 ? 92 : 74;
       camState.pos.copy(p); camState.look.lerp(l, camState.lastMode==="im-start" ? 1 : damp(10, dt));
     } else {
@@ -1853,7 +1856,7 @@
   }
   function cycleView(){
     IM.view = IM.view==="fp" ? "tp" : IM.view==="tp" ? "tv" : "fp"; setPref("sel-imview", IM.view);
-    if(IM.ctrl) IM.ctrl.headG.visible = IM.view !== "fp"; camState.lastMode = "im-start";
+    if(IM.ctrl) IM.ctrl.spine.visible = IM.view !== "fp"; camState.lastMode = "im-start";
   }
   // clavier (ordinateur) : flèches/ZQSD, Espace = passe/changer, J maintenu = tir/tacle, K = dribble, V = vue, P = pause
   window.addEventListener("keydown", e=>{
@@ -1916,7 +1919,7 @@
   };
   function fmStop(){
     FM.on = false; IM.on = false; IM.mode = null;
-    teams.all.forEach(h=>{ h.override = null; h.ctrlVel = null; h.headG.visible = true; });
+    teams.all.forEach(h=>{ h.override = null; h.ctrlVel = null; h.headG.visible = true; h.spine.visible = true; });
     if(IM.dom){ IM.dom.remove(); IM.dom = null; }
     if(cur && cur.container) cur.container.classList.remove("s3d-im");
     if(!IM.prevFs){ fsOn = false; applyFs(); }
@@ -2239,7 +2242,7 @@
     updatePlayers(dt, t);
     if(!m.showcase) updateBallSystem(dt); else world.ball.position.set(0, 0.11, 0);
     const rc = !m.showcase && BS.carrier;
-    world.ring.visible = !!rc;
+    world.ring.visible = !!rc && !(IM.on && IM.view === "fp" && rc === IM.ctrl);   // pas d'anneau sous ses propres pieds en vue subjective
     if(rc){ world.ring.position.set(rc.pos.x, 0.025, rc.pos.z); world.ring.material.color.set(rc.side==="us" ? teams.kits.us[0] : teams.kits.them[0]); world.ring.scale.setScalar(1 + Math.sin(t*6)*0.06); }
     updateCamera(dt, t);
     if(!m.showcase) updateScreens(m);
