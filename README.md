@@ -7,7 +7,7 @@ géants, joueurs animés, caméras façon retransmission TV.
 ## 📱 Installer l'APK sur Android
 
 1. Sur le téléphone, ouvrez la page **Releases** du dépôt (colonne de droite sur GitHub).
-2. Téléchargez `Selectionneur-v5.0.0.apk` dans la release la plus récente.
+2. Téléchargez `Selectionneur-v5.1.0.apk` dans la release la plus récente.
 3. Ouvrez le fichier et autorisez « l'installation d'applications inconnues » si Android le demande.
 
 Les nouvelles versions s'installent **par-dessus** l'ancienne (même signature) : la sauvegarde est conservée.
@@ -23,7 +23,7 @@ pelouse.
 
 | Commande | Effet |
 | --- | --- |
-| Joystick | Avancer / tourner (poussé à fond : sprint) |
+| Joystick | Direction de course : ↑ vers le but adverse, → vers la droite (poussé à fond : sprint) |
 | PASSE / CHANGER | Passe au partenaire visé · sans ballon : prendre le joueur le plus proche du ballon |
 | TIR / TACLE | Maintenir pour doser la puissance, la direction du joueur vise · sans ballon : tacle |
 | DRIBBLE | Crochet, passement de jambes ou roulette |

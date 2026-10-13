@@ -1749,7 +1749,7 @@
   function userShoot(power){
     const c = IM.ctrl; if(!userHasBall() || (act && act.kind==="shot")) return;
     const dirx = Math.sin(c.heading), dirz = Math.cos(c.heading);
-    let zAim = dirx < 0.15 ? (c.pos.z > 0 ? 1 : -1)*rnd(6,14) : c.pos.z + dirz*(HL - c.pos.x)/dirx + IM.joy.x*1.8;
+    let zAim = dirx < 0.15 ? (c.pos.z > 0 ? 1 : -1)*rnd(6,14) : c.pos.z + dirz*(HL - c.pos.x)/dirx;
     const yAim = 0.25 + power*1.9 + Math.max(0, power-0.85)*9;
     fmShoot(c, Math.min(1, power), zAim, yAim);
     if(FM.hooks && FM.hooks.event) FM.hooks.event(power > 0.85 ? `Frappe surpuissante de ${c.backLabel} !` : `${c.backLabel} tente sa chance !`);
@@ -1758,9 +1758,9 @@
     const c = IM.ctrl;
     if(!userHasBall() || IM.skillCd > 0) return;
     IM.skillCd = 1.4;
-    const dir = IM.joy.x ? Math.sign(IM.joy.x) : (Math.random()<0.5?-1:1);
+    const dir = Math.random()<0.5 ? -1 : 1;                           // +1 = crochet vers la droite du joueur
     const kinds = ["crochet","passement","roulette"], kind = kinds[(Math.random()*3)|0];
-    c.feint = {t:0, dir, kind}; BS.lat = dir*1.15; c.heading += dir*0.35;
+    c.feint = {t:0, dir:-dir, kind}; BS.lat = -dir*1.15; c.heading -= dir*0.35;
     let near = null, nd = 3.2;
     teams.them.forEach((h,i)=>{ if(i===0) return; const d = Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z); if(d < nd){ nd = d; near = h; } });
     if(near && Math.random() < 0.5 + (fmSkill("us", c.idx).att - fmSkill("them", near.idx).def)/180){
@@ -1790,9 +1790,19 @@
     if(c.stun > 0){ c.ctrlVel = new T.Vector3(0,0,0); return; }
     // sans consigne depuis un moment et sans ballon : l'IA replace le joueur
     if(!has && IM.lastInput > 1.2){ c.ctrlVel = null; return; }
-    c.heading += jx * (2.4 - Math.min(1, c.speed/9)*1.1) * dt;
-    const sp = jy > 0 ? jy*(jy > 0.92 ? 8.6 : 6.6) : jy*2.6;
-    c.ctrlVel = new T.Vector3(Math.sin(c.heading)*sp*(has ? 0.92 : 1), 0, Math.cos(c.heading)*sp*(has ? 0.92 : 1));
+    // v51 : le joystick donne DIRECTEMENT la direction sur le terrain (plus besoin de tourner en avançant).
+    // Vues 1re/3e personne : haut = vers le but adverse, droite = côté droit du terrain (sens d'attaque).
+    // Vue TV : haut = vers le haut de l'écran (fond du terrain), droite = vers la droite de l'écran.
+    const mag = Math.min(1, Math.hypot(jx, jy));
+    if(mag < 0.12){ c.ctrlVel = new T.Vector3(0,0,0); c.override = null; return; }
+    let wx, wz;
+    if(IM.view === "tv"){ wx = jx; wz = -jy; } else { wx = jy; wz = jx; }   // nous attaquons vers +X, la droite est +Z
+    const want = Math.atan2(wx, wz);
+    let dh = want - c.heading; while(dh > Math.PI) dh -= Math.PI*2; while(dh < -Math.PI) dh += Math.PI*2;
+    const turnRate = has ? 7 : 10;                                   // on tourne vite, un peu moins ballon au pied
+    c.heading += clamp(dh, -turnRate*dt, turnRate*dt);
+    const sp = mag*(mag > 0.92 ? 8.6 : 6.6) * (has ? 0.92 : 1) * (Math.abs(dh) > 1.6 ? 0.45 : 1);   // demi-tour : on freine
+    c.ctrlVel = new T.Vector3(Math.sin(c.heading)*sp, 0, Math.cos(c.heading)*sp);
     c.override = null;
   }
   function imCamera(dt){
@@ -1831,7 +1841,8 @@
         <button class="im-btn im-pass" data-im="pass">PASSE</button>
         <button class="im-btn im-shoot" data-im="shoot">TIR<span class="im-power"><i></i></span></button>
       </div>
-      <div class="im-paused">⏸ PAUSE<small>Touchez ⏸ pour reprendre</small></div>`;
+      <div class="im-paused">⏸ PAUSE<small>Touchez ⏸ pour reprendre</small></div>
+      <div class="im-tip">Joystick = direction : ↑ vers le but adverse</div>`;
     cur.container.appendChild(d);
     IM.dom = d;
     const joy = d.querySelector(".im-joy"), knob = d.querySelector(".im-knob");
@@ -2478,6 +2489,7 @@
   S._debug = ()=>({fm: FM.on ? {state:FM.state, clock:Math.round(FM.clock), restart: FM.restart ? FM.restart.kind : null, near: teams ? Math.min(...teams.us.concat(teams.them).map(h=> +h.pos.distanceTo(BS.pos).toFixed(1))) : null, vel:+BS.vel.length().toFixed(2), act: act ? act.kind : null, q: queue.length, pk: !!FM.pendingKick} : null, dbg:JSON.parse(JSON.stringify(dbg)), mode:BS.mode, carrier: BS.carrier ? BS.carrier.side+BS.carrier.idx : null, q:queue.length, act: act ? act.kind : null,
     ball:[+BS.pos.x.toFixed(1), +BS.pos.y.toFixed(2), +BS.pos.z.toFixed(1)],
     footDist: BS.carrier ? +Math.hypot(BS.carrier.pos.x-BS.pos.x, BS.carrier.pos.z-BS.pos.z).toFixed(2) : null});
+  S._ctrlPos = ()=> IM.ctrl ? [+IM.ctrl.pos.x.toFixed(1), +IM.ctrl.pos.z.toFixed(1), +IM.ctrl.heading.toFixed(2)] : null;
   S._fmJump = (sec)=>{ if(FM.on) FM.clock = sec; };   // tests : avance l'horloge du match joué
   S._fmTestGoal = (side)=>{ if(FM.on){ queue = []; act = null; BS.mode = "dead"; FM.shotPending = {side:side||"us", idx:9, outcome:"goal", assist:7}; } };
   // Actions de jeu envoyées par le moteur de match (cf. playPassChain / playSequence dans index.html)

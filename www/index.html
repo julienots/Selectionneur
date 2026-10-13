@@ -805,6 +805,15 @@ plus précis" puis "je veux jouer le match complet et en 1re personne dans le st
 ATTENTION si vous reprenez ce chantier : dans un match joué, l'équilibre ne vient plus des probabilités
 de tickMatch mais de l'IA 3D (fmCarrierAI, fmDefend, fmShoot). Stade3D._fmJump(sec) et
 Stade3D._fmTestGoal(side) servent aux tests automatisés.
+
+v51 — Retour de Julien sur la v50 : "les contrôles sont inversés et il faut tourner en même temps
+qu'avancer". [FAIT] (imControl / userShoot / imSkill dans stade3d.js) :
+- Bug corrigé : gauche/droite inversés (augmenter h.heading fait tourner à GAUCHE dans ce repère).
+- Nouveau schéma façon FIFA : le joystick donne directement la DIRECTION sur le terrain. En 1re/3e
+  personne : haut = vers le but adverse (+X), droite = côté droit dans le sens d'attaque (+Z) ; en
+  vue TV : directions de l'écran. Le joueur se tourne tout seul vers la direction demandée (freine
+  sur un demi-tour), la vue suit. Le tir vise selon l'orientation du joueur (plus de biais joystick).
+  Dribble : crochet vers la gauche ou la droite avec un sens cohérent ballon/corps.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1945,6 +1954,9 @@ body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .inf
 .im-paused small{font-family:'Barlow',sans-serif; font-size:13px; letter-spacing:0; opacity:.8;}
 .im-ui.paused .im-paused{display:flex;}
 .s3d-replaying .im-ui{display:none;}
+.im-tip{position:absolute; left:50%; bottom:calc(8px + env(safe-area-inset-bottom)); transform:translateX(-50%); color:#fff; font-size:11.5px;
+  background:rgba(0,0,0,0.45); padding:3px 10px; border-radius:10px; white-space:nowrap; animation:imTip 1s ease 6s forwards;}
+@keyframes imTip{to{opacity:0;}}
 </style>
 </head>
 <body>
