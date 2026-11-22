@@ -1,10 +1,14 @@
 // Copie les dépendances front (three.js + polices) depuis node_modules vers www/ pour que le jeu
 // tourne 100% hors-ligne (APK Android, PWA). À relancer après un `npm install` qui change ces versions.
 import { copyFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { buildSync } from "esbuild";
 const nm = "node_modules";
 mkdirSync("www/vendor", { recursive: true });
 mkdirSync("www/fonts", { recursive: true });
-copyFileSync(`${nm}/three/build/three.min.js`, "www/vendor/three.min.js");
+// v52 : three.js récent (0.187) n'a plus de build "global" : on fabrique un IIFE (window.THREE) qui
+// contient aussi le post-traitement (cf. scripts/three-entry.mjs).
+buildSync({ entryPoints:["scripts/three-entry.mjs"], bundle:true, minify:true, format:"iife",
+  globalName:"THREE", target:"es2020", outfile:"www/vendor/three.min.js", legalComments:"none", logLevel:"warning" });
 const fonts = [
   ["Bebas Neue", "bebas-neue", [400]],
   ["Barlow", "barlow", [400, 600, 700]],

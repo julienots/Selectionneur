@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Sélectionneur — manager de foot 3D</title>
+<title>Sélectionneur — le match se joue depuis le banc</title>
 <!--
 ========================================================================================
 GUIDE DE PRISE EN MAIN — À LIRE EN PREMIER SI VOUS REPRENEZ CE PROJET (ajouté juillet 2026)
@@ -814,6 +814,58 @@ qu'avancer". [FAIT] (imControl / userShoot / imSkill dans stade3d.js) :
   vue TV : directions de l'écran. Le joueur se tourne tout seul vers la direction demandée (freine
   sur un demi-tour), la vue suit. Le tir vise selon l'orientation du joueur (plus de biais joystick).
   Dribble : crochet vers la gauche ou la droite avec un sens cohérent ballon/corps.
+v52 — Demande de Julien : "améliore le jeu à mort, change tout le concept : ça doit être un jeu en
+2.5D mais on ne doit pas jouer les joueurs, shaders et tout réalisme" (+ "prends la toute dernière
+version possible" : repris depuis la v51, three.js passé de 0.160 à 0.187, la dernière). [FAIT] :
+- NOUVEAU CONCEPT "BANC DE TOUCHE" : le mode "Jouer le match (1re personne)" (v50/v51) est SUPPRIMÉ
+  (couche IM : joystick, PASSE/TIR/DRIBBLE, vues 1re/3e personne, imControl/imCamera/buildImControls,
+  fmSwitch/fmUserTackle, CSS .im-*). Le bouton "Coup d'envoi ▶ · prendre place sur le banc" lance
+  startCoachedMatch(next, ctx) (sélection ET club ; ancien nom startPlayedMatch conservé en alias) :
+  avec WebGL, m.played=true et le match entier est simulé en temps réel par l'IA (FM) avec les 22
+  joueurs autonomes ; sans WebGL, tickMatch historique.
+- ZONE TECHNIQUE (bloc "BANC DE TOUCHE (v52)" dans stade3d.js, objet COACH) : barre en bas du stade
+  (📋 Consignes / énergie ⚡ / 🔄 remplacements) + tiroir .cz-drawer : Mentalité (Bus → Tout attaque),
+  Pressing, Ligne défensive, Tempo, Largeur (TAC_ROWS) ; cris (SHOUTS : "On pousse", "Concentration",
+  "On calme le jeu", 6 min d'effet, 9 min de recharge, plan de coupe caméra sur le sélectionneur qui
+  gesticule : camState.coachCam / COACH.gesture). API : Stade3D.setTactic(k,v), Stade3D.shout(kind),
+  Stade3D.coachState(), Stade3D.onSub(m, idx), Stade3D.resumeHalf(m, {style, talk}).
+  Effets sur l'IA : fmShape (hauteur du bloc selon mentalité/ligne/pressing, bloc bas bloqué dans sa
+  moitié, 1 à 3 presseurs, largeur), fmCarrierAI (vitesse de décision selon le tempo, envie de frapper
+  selon la mentalité, poids progression/sécurité/largeur des passes, ballons longs en tempo vertical),
+  fmDefend (agressivité des tacles selon le pressing), fmSkill (+ sideMod : énergie, cris, m.tacticMod).
+  Énergie COACH.energy (coachUpdate) : baisse plus vite avec pressing/tempo/mentalité, +10 % à la
+  mi-temps, +3,5 % par changement ; une équipe fatiguée court moins vite (updatePlayers) et perd ses
+  duels. L'adversaire a son entraîneur IA (coachAI) : il pousse quand il est mené après l'heure de jeu,
+  recule quand il mène, calme le pressing quand ses joueurs sont cuits.
+  Consignes de départ = style choisi avant-match (styleToTac(m.styleKey)), adversaire selon
+  m.oppTactique.style. Mi-temps : playedMatchHooks.halftime renvoie "wait", le stade attend la
+  causerie (showHalftimeOverlay) ; le style choisi au vestiaire remplace les consignes s'il change.
+  Remplacements : doSubstitution -> Stade3D.onSub remplace le personnage 3D (nom au dos) en place.
+- 2.5D : nouvelle caméra "2.5D" (défaut, CAM_MODES[0]) — très haute, inclinée ~54°, longue focale
+  (perspective écrasée façon maquette), toit et faisceaux des projecteurs masqués dans cette vue
+  (world.roof, world.beamsTop). Préférence de caméra déplacée sur la clé "sel-cam2" pour que tout le
+  monde démarre en 2.5D. Réglages : choix 2.5D / TV / Tactique / Proche / Tribune / Drone.
+- SHADERS / RÉALISME (bloc "RENDU RÉALISTE (v52)") : chaîne EffectComposer (RenderPass MSAA x4 en
+  HDR demi-flottant -> GTAOPass (occlusion ambiante, qualité Ultra) -> UnrealBloomPass -> OutputPass
+  (ACES + sRGB) -> GRADE_SHADER maison : étalonnage TV lift/gain/contraste/saturation, aberration
+  chromatique, vignettage, grain, flou de bascule "tilt-shift" en vue 2.5D/Tactique). Qualité
+  "Économie" = rendu direct sans post-traitement (POST.on). renderFrame() remplace tous les
+  renderer.render. Pelouse : installGrassShader (onBeforeCompile) — plaques d'herbe procédurales en
+  coordonnées monde, bandes de tonte qui s'inversent selon le point de vue, rugosité variable,
+  reflets mouillés sous la pluie (GRASS_U.uWet). Éclairage d'environnement PBR (RoomEnvironment +
+  PMREM, scene.environmentIntensity jour/nuit dans applyLighting). Ombres PCF adoucies (radius).
+- THREE.JS 0.187 : il n'existe plus de build "global" three.min.js -> scripts/vendor.mjs compile
+  scripts/three-entry.mjs avec esbuild (devDependency) en IIFE window.THREE, qui embarque aussi les
+  modules de post-traitement (EffectComposer, RenderPass, ShaderPass, UnrealBloomPass, OutputPass,
+  SMAAPass, GTAOPass, RoomEnvironment). THREE.Clock (déprécié) remplacé par makeClock() ;
+  PCFSoftShadowMap (retiré) remplacé par PCFShadowMap.
+ATTENTION si vous reprenez ce chantier : l'équilibre des matchs dirigés vient UNIQUEMENT de l'IA FM
+(fmCarrierAI/fmShape/fmDefend/fmShoot + COACH) ; les probabilités de tickMatch ne servent plus qu'en
+l'absence de WebGL. Toute nouvelle consigne doit être ajoutée à TAC_DEF/TAC_ROWS ET lue via tac(side)
+(qui applique les cris). Pour ajouter un module three.js (ex. un autre pass), l'exporter dans
+scripts/three-entry.mjs puis relancer `npm run vendor`. Les tests automatisés peuvent utiliser
+Stade3D._fmJump(sec), Stade3D._fmTestGoal(side) et Stade3D.coachState() ; en rendu logiciel
+(swiftshader) passer la qualité en "eco" (localStorage "sel-q3d") pour garder une cadence correcte.
 -->
 
 <link rel="stylesheet" href="./fonts/fonts.css">
@@ -1465,7 +1517,7 @@ button:active, .btn:active, .slot-pick:active, .talk-option:active{transform:sca
 .pitch-wrap.mode3d{height:clamp(250px, 66vw, 340px); background:#03050b; border:1px solid rgba(212,175,55,0.35);
   box-shadow:0 14px 34px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.04); perspective:none;}
 .pitch-wrap.mode3d::before, .pitch-wrap.mode3d::after{display:none;}
-.pitch-wrap.mode3d > :not(.s3d-layer):not(.s3d-hud):not(.goal-flash):not(.goal-card-pop):not(.im-ui){display:none !important;}
+.pitch-wrap.mode3d > :not(.s3d-layer):not(.s3d-hud):not(.goal-flash):not(.goal-card-pop):not(.cz){display:none !important;}
 .s3d-layer{position:absolute; inset:0; z-index:1;}
 .s3d-canvas{width:100% !important; height:100% !important; display:block; touch-action:pan-y;}
 .s3d-hud{position:absolute; inset:0; z-index:6; pointer-events:none; font-family:'Barlow Condensed',sans-serif;}
@@ -1925,38 +1977,50 @@ body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .inf
 .s3d-replaying::before, .s3d-replaying::after{content:''; display:block !important; position:absolute; left:0; right:0; height:9%; background:#000; z-index:5;}
 .s3d-replaying::before{top:0;} .s3d-replaying::after{bottom:0; top:auto; width:auto; margin:0; border:none; border-radius:0;}
 
-/* =====================================================================================
-   v50 — MATCH JOUÉ : commandes tactiles (joystick, PASSE / TIR / DRIBBLE) par-dessus la 3D
+/* /* =====================================================================================
+   v52 — BANC DE TOUCHE : zone technique par-dessus le stade 2.5D (aucun joueur contrôlé)
    ===================================================================================== */
-.btn-play{width:100%; margin-top:10px; background:linear-gradient(135deg,#ff3b4e,#c4162a) !important; color:#fff !important;
-  box-shadow:0 8px 22px rgba(255,59,78,0.35) !important; font-size:16px;}
-.s3d-im .s3d-tools, .s3d-im .s3d-carrier{display:none !important;}
-.s3d-im .s3d-ticker{top:calc(52px + env(safe-area-inset-top)); bottom:auto !important; left:12px; right:12px; font-size:12.5px; opacity:.92;}
-.im-ui{position:absolute; inset:0; z-index:9; pointer-events:none; font-family:'Barlow Condensed',sans-serif; user-select:none; -webkit-user-select:none;}
-.im-top{position:absolute; top:calc(10px + env(safe-area-inset-top)); right:12px; display:flex; gap:6px; align-items:center; pointer-events:auto;}
-.im-badge{background:rgba(255,59,78,0.9); color:#fff; font-weight:700; padding:5px 10px; border-radius:10px; font-size:13px; letter-spacing:.04em; max-width:42vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-.im-small{background:rgba(6,10,22,0.75); color:#fff; border:1px solid rgba(255,255,255,0.25); border-radius:10px; padding:5px 9px; font-family:inherit; font-weight:700; font-size:13px;}
-.im-joy{position:absolute; left:calc(18px + env(safe-area-inset-left)); bottom:calc(26px + env(safe-area-inset-bottom)); width:132px; height:132px; border-radius:50%;
-  background:radial-gradient(circle, rgba(255,255,255,0.10), rgba(255,255,255,0.04)); border:2px solid rgba(255,255,255,0.28); pointer-events:auto; touch-action:none;}
-.im-knob{position:absolute; left:50%; top:50%; width:58px; height:58px; margin:-29px 0 0 -29px; border-radius:50%;
-  background:radial-gradient(circle at 35% 30%, #fff, #c9d3e6); box-shadow:0 4px 12px rgba(0,0,0,0.5); transition:transform .05s;}
-.im-btns{position:absolute; right:calc(14px + env(safe-area-inset-right)); bottom:calc(24px + env(safe-area-inset-bottom)); width:170px; height:150px; pointer-events:none;}
-.im-btn{position:absolute; border-radius:50%; border:2px solid rgba(255,255,255,0.55); color:#fff; font-family:inherit; font-weight:700; letter-spacing:.04em;
-  pointer-events:auto; touch-action:none; box-shadow:0 6px 16px rgba(0,0,0,0.45); text-shadow:0 1px 3px rgba(0,0,0,0.6);}
-.im-btn:active{transform:scale(0.92); filter:brightness(1.2);}
-.im-shoot{right:0; bottom:0; width:84px; height:84px; font-size:18px; background:radial-gradient(circle at 35% 30%, #ff6a78, #c4162a);}
-.im-pass{right:92px; bottom:6px; width:66px; height:66px; font-size:14px; background:radial-gradient(circle at 35% 30%, #6aa0ff, #1f4fc7);}
-.im-skill{right:14px; bottom:94px; width:56px; height:56px; font-size:11px; background:radial-gradient(circle at 35% 30%, #4fe39a, #169454);}
-.im-power{position:absolute; left:12px; right:12px; bottom:14px; height:5px; border-radius:3px; background:rgba(0,0,0,0.4); overflow:hidden;}
-.im-power i{display:block; height:100%; width:0; background:linear-gradient(90deg,#ffe066,#ff8a00,#ff2a2a);}
-.im-paused{display:none; position:absolute; inset:0; background:rgba(0,0,0,0.55); color:#fff; font-family:'Bebas Neue',sans-serif; font-size:40px;
-  letter-spacing:.1em; align-items:center; justify-content:center; flex-direction:column; pointer-events:none;}
-.im-paused small{font-family:'Barlow',sans-serif; font-size:13px; letter-spacing:0; opacity:.8;}
-.im-ui.paused .im-paused{display:flex;}
-.s3d-replaying .im-ui{display:none;}
-.im-tip{position:absolute; left:50%; bottom:calc(8px + env(safe-area-inset-bottom)); transform:translateX(-50%); color:#fff; font-size:11.5px;
-  background:rgba(0,0,0,0.45); padding:3px 10px; border-radius:10px; white-space:nowrap; animation:imTip 1s ease 6s forwards;}
-@keyframes imTip{to{opacity:0;}}
+.coach-hint{margin:8px 2px 0; font-size:12.5px; opacity:.85;}
+.pitch-wrap.mode3d.s3d-coach{height:clamp(300px, 96vw, 460px);}
+.s3d-coach #s3d2d{display:none !important;}
+.s3d-coach .s3d-carrier{bottom:auto; top:56px;}
+.s3d-coach .s3d-ticker{bottom:52px;}
+.pitch-wrap.s3d-fullscreen.s3d-coach .s3d-carrier{top:calc(66px + env(safe-area-inset-top)); bottom:auto;}
+.pitch-wrap.s3d-fullscreen.s3d-coach .s3d-ticker{bottom:calc(60px + env(safe-area-inset-bottom));}
+.cz{position:absolute; inset:0; z-index:8; pointer-events:none; font-family:'Barlow Condensed',sans-serif; color:#fff; user-select:none; -webkit-user-select:none;}
+.cz button{font-family:inherit; color:#fff; cursor:pointer;}
+.cz-bar{position:absolute; left:8px; right:8px; bottom:8px; display:flex; align-items:center; gap:8px; pointer-events:auto;}
+.pitch-wrap.s3d-fullscreen .cz-bar{left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom));}
+.cz-main{background:linear-gradient(135deg,#2f6bff,#1a3fb8); border:1px solid rgba(255,255,255,0.3); border-radius:10px; padding:7px 12px;
+  font-weight:700; font-size:14px; letter-spacing:.05em; text-transform:uppercase; box-shadow:0 6px 16px rgba(20,60,200,0.35);}
+.cz-sm{background:rgba(6,10,22,0.78); border:1px solid rgba(255,255,255,0.22); border-radius:10px; padding:6px 10px; font-size:16px;}
+.cz-sm:disabled{opacity:.4;}
+.cz-en{flex:1; display:flex; align-items:center; gap:6px; background:rgba(6,10,22,0.7); border:1px solid rgba(255,255,255,0.14); border-radius:10px; padding:6px 9px; font-size:13px; min-width:0;}
+.cz-en-track{flex:1; height:6px; border-radius:3px; background:rgba(255,255,255,0.12); overflow:hidden;}
+.cz-en-track i{display:block; height:100%; width:100%; background:#3ddc84; transition:width .6s, background .6s;}
+.cz-en b{font-weight:700; min-width:34px; text-align:right;}
+.cz-drawer{position:absolute; left:6px; right:6px; bottom:52px; max-height:calc(100% - 64px); overflow:auto; pointer-events:auto;
+  background:linear-gradient(180deg, rgba(10,16,34,0.95), rgba(6,10,22,0.97)); border:1px solid rgba(255,255,255,0.14); border-radius:14px;
+  padding:10px 10px 8px; box-shadow:0 18px 40px rgba(0,0,0,0.55); transform:translateY(12px); opacity:0; visibility:hidden; transition:.22s ease;
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);}
+.pitch-wrap.s3d-fullscreen .cz-drawer{left:12px; right:12px; bottom:calc(60px + env(safe-area-inset-bottom)); max-width:560px; margin:0 auto;}
+.cz.open .cz-drawer{transform:none; opacity:1; visibility:visible;}
+.cz-head{display:flex; align-items:center; gap:8px; margin-bottom:6px;}
+.cz-head b{font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:.06em; color:var(--gold);}
+.cz-head span{flex:1; font-size:12px; opacity:.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.cz-x{background:none; border:none; font-size:16px; opacity:.7; padding:2px 6px;}
+.cz-row{display:flex; align-items:center; gap:8px; margin:5px 0;}
+.cz-lab{width:74px; flex-shrink:0; font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; opacity:.8;}
+.cz-seg{flex:1; display:flex; background:rgba(255,255,255,0.06); border-radius:9px; padding:2px; gap:2px; min-width:0;}
+.cz-seg button{flex:1; min-width:0; background:none; border:none; border-radius:7px; padding:6px 2px; font-size:12.5px; font-weight:600; opacity:.75;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.cz-seg button.on{background:linear-gradient(135deg,#2f6bff,#1a3fb8); opacity:1; box-shadow:0 2px 8px rgba(30,80,255,0.4);}
+.cz-shouts{flex-wrap:wrap; margin-top:8px;}
+.cz-shout{flex:1 1 30%; background:rgba(255,197,61,0.12); border:1px solid rgba(255,197,61,0.4); border-radius:9px; padding:7px 4px; font-size:12.5px; font-weight:700;}
+.cz-shout.on{background:rgba(255,197,61,0.4);}
+.cz-shout:disabled:not(.on){opacity:.35;}
+.cz-foot{display:flex; justify-content:space-between; font-size:11.5px; opacity:.7; margin-top:6px;}
+.s3d-replaying .cz{display:none;}
 </style>
 </head>
 <body>
@@ -1970,7 +2034,7 @@ body:not(.in-live) .info-chip .ic-val{color:var(--ink);} body:not(.in-live) .inf
     <div class="boot-crowd"></div>
     <div class="boot-center">
       <div class="boot-ball"><img src="./icons/icon-192.png" alt=""></div>
-      <div class="boot-eyebrow">Manager de foot 3D</div>
+      <div class="boot-eyebrow">Sélectionneur 2.5D · le match se joue depuis le banc</div>
       <h1 class="boot-title">SÉLECTIONNEUR</h1>
       <div class="boot-flag"></div>
     </div>
@@ -6034,9 +6098,9 @@ function renderMatchTab(el){
     <button class="btn btn-ghost" id="saveLineupBtn" style="margin:8px 0 4px;">💾 Enregistrer la compo actuelle</button>
     <div id="groups"></div>
     <button class="btn btn-primary" id="kickoffBtn" ${filledCount<11?"disabled":""}>
-      ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶"}
+      ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶ · prendre place sur le banc"}
     </button>
-    ${(window.Stade3D && Stade3D.supported()) ? `<button class="btn btn-play" id="playMatchBtn" ${filledCount<11?"disabled":""}>🎮 Jouer le match (1re personne)</button>` : ""}
+    <div class="formation-note coach-hint">📋 Vous ne jouez pas : vous dirigez. Mentalité, pressing, ligne, tempo, largeur, cris et changements en direct depuis la zone technique.</div>
   `;
   mountMatchHero(el, null, next);
   el.querySelector("#openTactics").onclick = openTacticsSheet;
@@ -6077,9 +6141,7 @@ function renderMatchTab(el){
   }).join("");
   groups.querySelectorAll(".slot-pick").forEach(s=> s.onclick = ()=> openSlotPicker(s.dataset.slot, s.dataset.pos));
   const kickoff = el.querySelector("#kickoffBtn");
-  if(filledCount>=11) kickoff.onclick = ()=> startMatch(next);
-  const playBtn = el.querySelector("#playMatchBtn");
-  if(playBtn && filledCount>=11) playBtn.onclick = ()=> startPlayedMatch(next, null);
+  if(filledCount>=11) kickoff.onclick = ()=> startCoachedMatch(next, null);
 }
 
 /* ---------------- COMPOSITIONS ENREGISTRÉES ---------------- */
@@ -6188,7 +6250,7 @@ function renderSettingsPanels(){
       <div class="set-block"><div class="set-lab">⏱️ Rythme des matchs<small>Durée d'un match en direct</small></div>
         ${segCtl("pace", Object.entries(MATCH_PACES).map(([k,v])=>[k, v.label]), matchPaceKey())}</div>
       ${has3d ? `<div class="set-block"><div class="set-lab">📺 Caméra par défaut</div>
-        ${segCtl("cam", [["TV","TV"],["Proche","Proche"],["Tactique","2.5D"],["Tribune","Tribune"],["Drone","Drone"]], Stade3D.getDefaultCam())}</div>
+        ${segCtl("cam", [["2.5D","2.5D"],["TV","TV"],["Tactique","Tactique"],["Proche","Proche"],["Tribune","Tribune"],["Drone","Drone"]], Stade3D.getDefaultCam())}</div>
       ${toggleRow("ticker", "💬", "Bandeau de commentaires", "Dernière action affichée sur la 3D", Stade3D.tickerOn())}` : ""}
     </div>
     ${has3d ? `<h3 class="set-title">✨ Graphismes</h3>
@@ -8091,11 +8153,16 @@ function renderOppLineupCard(next){
 function fallbackPlayed(m){
   if(m && m.played && !m.finalWhistlePlayed){ m.played = false; setTimeout(()=> tickMatch(m), 600); }   // pas de 3D : match simulé classique
 }
-function startPlayedMatch(next, ctx){
-  next.played = true;
-  try{ localStorage.setItem("sel-view3d", "1"); }catch(e){}
+// v52 : BANC DE TOUCHE — tout match en direct est simulé en temps réel dans le stade 2.5D (FM dans
+// stade3d.js) et vous le dirigez depuis la zone technique (aucun joueur contrôlé). Sans WebGL, le
+// moteur probabiliste historique (tickMatch) prend le relais.
+function startCoachedMatch(next, ctx){
+  const can3D = !!(window.Stade3D && Stade3D.supported());
+  next.played = can3D;
+  if(can3D){ try{ localStorage.setItem("sel-view3d", "1"); }catch(e){} }
   if(ctx === "club") startClubLiveMatch(next); else startMatch(next);
 }
+const startPlayedMatch = startCoachedMatch;   // ancien nom (v50)
 function playedMatchHooks(m){
   const live = ()=> isLiveScreenActive(m);
   return {
@@ -8119,7 +8186,10 @@ function playedMatchHooks(m){
       pushEntry(m, {min:45, goal:false, text:`⏸️ Mi-temps : ${m.us} - ${m.them}.`});
       COMMENTATEUR.say(`C'est la mi-temps ! ${m.us} à ${m.them}.`, 3);
       saveGame();
+      // v52 : causerie de vestiaire ; le stade attend votre choix (Stade3D.resumeHalf)
+      if(live()){ setTimeout(()=>{ if(isLiveScreenActive(m)) showHalftimeOverlay(m); else Stade3D.resumeHalf(m); }, 1800); return "wait"; }
     },
+    subs(){ if(m.subsUsed < m.subsMax && !m.finalWhistlePlayed) openSubstitutionSheet(m); },
     end(){
       m.minute = 90; m.finalWhistlePlayed = true;
       if(isKnockoutMatch(m) && m.us === m.them) m.extraTime = true;   // séance de tirs au but
@@ -8226,6 +8296,7 @@ function doSubstitution(m, outIdx, inId){
   const delta = (overall(inPlayer) - overall(outPlayer)) * 0.15;
   m.ourStrength = (m.ourStrength||0) + delta + 0.8;
   pushEntry(m, {min:m.minute, goal:false, text:`🔄 Changement : ${inPlayer.nom} entre à la place de ${outPlayer.nom}.`});
+  if(m.played && window.Stade3D) Stade3D.onSub(m, outIdx);   // v52 : le remplaçant entre aussi sur la pelouse 3D
   closeSheet();
   render();
 }
@@ -8685,9 +8756,8 @@ function renderClubMatchTab(el){
         <button class="btn-soin" id="clubAutoFillBtn">⚡ Composition auto</button>
       </div>
       <div id="clubGroups"></div>
-      ${(window.Stade3D && Stade3D.supported()) ? `<button class="btn btn-play" id="clubPlayMatchBtn" ${filledCount<11?"disabled":""}>🎮 Jouer le match (1re personne)</button>` : ""}
       <button class="btn btn-primary" id="clubKickoffBtn" ${filledCount<11?"disabled":""}>
-        ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶"}
+        ${filledCount<11 ? "Complétez votre équipe" : "Coup d'envoi ▶ · prendre place sur le banc"}
       </button>
       <button class="btn btn-ghost" id="simClubMatchBtn" style="margin-top:8px;">⏩ Simulation rapide (sans direct)</button>
     `);
@@ -8713,9 +8783,7 @@ function renderClubMatchTab(el){
     }).join("");
     groups.querySelectorAll(".slot-pick").forEach(s=> s.onclick = ()=> openClubSlotPicker(s.dataset.slot, s.dataset.pos));
     const kickoff = el.querySelector("#clubKickoffBtn");
-    if(filledCount>=11) kickoff.onclick = ()=> startClubLiveMatch(next);
-    const clubPlay = el.querySelector("#clubPlayMatchBtn");
-    if(clubPlay && filledCount>=11) clubPlay.onclick = ()=> startPlayedMatch(next, "club");
+    if(filledCount>=11) kickoff.onclick = ()=> startCoachedMatch(next, "club");
     el.querySelector("#simClubMatchBtn").onclick = ()=>{ simulateClubMatch(); render(); };
   }
 
@@ -9109,6 +9177,7 @@ function showHalftimeOverlay(m){
     m.ourStrength += t.strengthMod;
     (m.usOrder||[]).filter(Boolean).forEach(p=> p.forme = clamp(p.forme + Math.round(t.moraleMod/2), 30, 99));
     closeSheet();
+    if(m.played && window.Stade3D){ Stade3D.resumeHalf(m, {style:m.styleKey, talk:t.key}); return; }   // v52 : match dirigé depuis le banc
     startAmbientMotion(m);
     setTimeout(()=> tickMatch(m), 400);
   });

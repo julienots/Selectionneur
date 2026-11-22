@@ -60,8 +60,8 @@
   S.QUALITIES = {eco:"Économie", normal:"Normale", ultra:"Ultra"};
   S.getQuality = ()=> { const q = pref("sel-q3d", "normal"); return S.QUALITIES[q] ? q : "normal"; };
   S.setQuality = (q)=>{ setPref("sel-q3d", q); applyQuality(); };
-  S.getDefaultCam = ()=> pref("sel-cam", "TV");
-  S.setDefaultCam = (c)=>{ setPref("sel-cam", c); const i = CAM_MODES.indexOf(c); if(i>=0) camMode = i; };
+  S.getDefaultCam = ()=> pref("sel-cam2", "2.5D");
+  S.setDefaultCam = (c)=>{ setPref("sel-cam2", c); const i = CAM_MODES.indexOf(c); if(i>=0) camMode = i; };
   S.tickerOn = ()=> pref("sel-ticker", "1") === "1";
   S.setTicker = (on)=> setPref("sel-ticker", on ? "1" : "0");
 
@@ -366,7 +366,7 @@
   let cur = null;       // {m, container, hud...}
   let rafId = 0, running = false;
   let camMode = 0;
-  const CAM_MODES = ["TV", "Proche", "Tactique", "Tribune", "Drone"];
+  const CAM_MODES = ["2.5D", "TV", "Tactique", "Proche", "Tribune", "Drone"];   // v52 : vue 2.5D par défaut
   let fsOn = false;
 
   function applyQuality(){
@@ -381,7 +381,17 @@
     }
     if(world && world.key){ const sz = q==="ultra" ? 4096 : 2048; if(world.key.shadow.mapSize.x !== sz){ world.key.shadow.mapSize.set(sz,sz); if(world.key.shadow.map){ world.key.shadow.map.dispose(); world.key.shadow.map = null; } } }
     if(world && world.crowd) world.crowd.count = q==="eco" ? Math.floor(world.crowdN*0.55) : world.crowdN;
+    // v52 : post-traitement (bloom, étalonnage, grain, tilt-shift ; occlusion ambiante GTAO en Ultra)
+    POST.on = !!POST.composer && q !== "eco";
+    if(POST.gtao) POST.gtao.enabled = q === "ultra";
+    if(POST.composer) POST.composer.setPixelRatio(renderer.getPixelRatio());
     lastW = 0;
+  }
+  // v52 : petite horloge maison (THREE.Clock est déprécié dans three.js récent)
+  function makeClock(){
+    const now = ()=> (typeof performance !== "undefined" ? performance.now() : Date.now())/1000;
+    const c = {last:now(), elapsedTime:0, getDelta(){ const n = now(), d = Math.max(0, n - c.last); c.last = n; c.elapsedTime += d; return d; }};
+    return c;
   }
   function initRenderer(){
     renderer = new T.WebGLRenderer({antialias:true, powerPreference:"high-performance", alpha:false});
@@ -391,15 +401,130 @@
     renderer.toneMapping = T.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = T.PCFSoftShadowMap;
+    renderer.shadowMap.type = T.PCFShadowMap;        // v52 : PCFSoftShadowMap retiré de three.js (PCF est désormais adouci)
     renderer.domElement.className = "s3d-canvas";
     renderer.domElement.addEventListener("webglcontextlost", (e)=>{ e.preventDefault(); webglOK=false; S.setEnabled(false); if(window.render) try{ window.render(); }catch(_){} });
     scene = new T.Scene();
     camera = new T.PerspectiveCamera(30, 1.6, 0.5, 900);
-    clock = new T.Clock();
+    clock = makeClock();
     buildWorld();
+    initPost();
     { const i = CAM_MODES.indexOf(S.getDefaultCam()); if(i>=0) camMode = i; }
     applyQuality();
+  }
+
+
+  // ---------------------------------------------------------------- RENDU RÉALISTE (v52)
+  // Chaîne de post-traitement (three.js 0.187, modules embarqués dans vendor/three.min.js par
+  // scripts/vendor.mjs) : RenderPass (MSAA x4, HDR demi-flottant) -> GTAO (occlusion ambiante, Ultra)
+  // -> UnrealBloom (halos des projecteurs, maillots clairs) -> OutputPass (tone mapping ACES + sRGB)
+  // -> GRADE (étalonnage "retransmission" : lift/gain, contraste, saturation, aberration chromatique,
+  // vignettage, grain de capteur, flou de bascule pour la vue 2.5D). Qualité "Économie" = rendu direct.
+  const POST = {composer:null, render:null, gtao:null, bloom:null, out:null, grade:null, on:false, tilt:0, tiltTgt:0, night:true};
+  const GRADE_SHADER = {
+    uniforms:{
+      tDiffuse:{value:null}, uTime:{value:0}, uRes:{value:new T.Vector2(1,1)},
+      uVig:{value:0.34}, uGrain:{value:0.028}, uAberr:{value:0.0016}, uTilt:{value:0}, uFocus:{value:0.52},
+      uSat:{value:1.1}, uContrast:{value:1.07}, uLift:{value:new T.Vector3(0.006,0.010,0.02)}, uGain:{value:new T.Vector3(1.03,1.0,0.96)},
+    },
+    vertexShader:"varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+    fragmentShader:`
+      uniform sampler2D tDiffuse; uniform float uTime, uVig, uGrain, uAberr, uTilt, uFocus, uSat, uContrast;
+      uniform vec2 uRes; uniform vec3 uLift, uGain; varying vec2 vUv;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)))*43758.5453); }
+      vec3 tap(vec2 uv){ return texture2D(tDiffuse, uv).rgb; }
+      void main(){
+        vec2 q = vUv - 0.5;
+        vec2 ab = q*uAberr*(0.6 + dot(q,q)*2.0);
+        vec3 c = vec3(texture2D(tDiffuse, vUv + ab).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - ab).b);
+        // flou de bascule (tilt-shift) : net au centre, flou en haut et en bas de l'image (effet maquette 2.5D)
+        float bl = smoothstep(0.16, 0.5, abs(vUv.y - uFocus))*uTilt;
+        if(bl > 0.02){
+          vec2 px = bl*1.8/uRes;
+          vec3 acc = c*2.0;
+          acc += tap(vUv + vec2( px.x, 0.0)) + tap(vUv + vec2(-px.x, 0.0)) + tap(vUv + vec2(0.0,  px.y)) + tap(vUv + vec2(0.0, -px.y));
+          acc += tap(vUv + px*vec2( 1.6, 1.6)) + tap(vUv + px*vec2(-1.6, 1.6)) + tap(vUv + px*vec2(1.6,-1.6)) + tap(vUv + px*vec2(-1.6,-1.6));
+          c = acc/10.0;
+        }
+        // étalonnage façon retransmission TV
+        c = c*uGain + uLift*(1.0 - c);
+        c = (c - 0.5)*uContrast + 0.5;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = mix(vec3(l), c, uSat);
+        // vignettage + grain de capteur
+        c *= 1.0 - uVig*dot(q,q)*2.0;
+        c += (hash(vUv*uRes + fract(uTime*7.31)*91.7) - 0.5)*uGrain;
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+      }`,
+  };
+  function initPost(){
+    if(!T.EffectComposer || !T.RenderPass || !T.UnrealBloomPass || !T.OutputPass || !T.ShaderPass) return;
+    try{
+      const isGL2 = renderer.capabilities && renderer.capabilities.isWebGL2;
+      const rt = new T.WebGLRenderTarget(4, 4, {type:T.HalfFloatType, samples:isGL2 ? 4 : 0});
+      const c = new T.EffectComposer(renderer, rt);
+      POST.render = new T.RenderPass(scene, camera); c.addPass(POST.render);
+      if(T.GTAOPass){ POST.gtao = new T.GTAOPass(scene, camera, 4, 4); POST.gtao.enabled = false; c.addPass(POST.gtao); }
+      POST.bloom = new T.UnrealBloomPass(new T.Vector2(256, 256), 0.32, 0.6, 0.9); c.addPass(POST.bloom);
+      POST.out = new T.OutputPass(); c.addPass(POST.out);
+      POST.grade = new T.ShaderPass(GRADE_SHADER); c.addPass(POST.grade);
+      POST.composer = c;
+    }catch(e){ console.warn("Post-traitement indisponible", e); POST.composer = null; }
+  }
+  function resizePost(w, h){
+    if(!POST.composer) return;
+    POST.composer.setPixelRatio(renderer.getPixelRatio());
+    POST.composer.setSize(w, h);
+    const pr = renderer.getPixelRatio();
+    POST.grade.uniforms.uRes.value.set(w*pr, h*pr);
+  }
+  function renderFrame(){
+    if(!POST.on){ renderer.render(scene, camera); return; }
+    const t = clock ? clock.elapsedTime : 0;
+    POST.tilt = lerp(POST.tilt, RP.on ? 0 : POST.tiltTgt, 0.06);
+    const u = POST.grade.uniforms;
+    u.uTime.value = t; u.uTilt.value = POST.tilt;
+    u.uVig.value = RP.on ? 0.5 : 0.34;
+    // les projecteurs "bavent" davantage la nuit, et encore plus pendant la fête d'un but
+    POST.bloom.strength = (POST.night ? 0.38 : 0.18) + (world ? world.goalPulse*0.35 : 0);
+    POST.composer.render();
+  }
+
+  // Pelouse réaliste (v52) : shader injecté dans le MeshStandardMaterial de la pelouse.
+  //  - touffes / plaques d'herbe procédurales (bruit fractal en coordonnées monde) ;
+  //  - bandes de tonte DÉPENDANTES DU POINT DE VUE (comme une vraie pelouse : une bande claire devient
+  //    sombre vue de l'autre côté, car les brins sont couchés dans le sens de la tondeuse) ;
+  //  - rugosité variable, reflet mouillé sous la pluie (uWet), assombrissement des zones usées.
+  const GRASS_U = {uWet:{value:0}};
+  function installGrassShader(mat){
+    mat.onBeforeCompile = (sh)=>{
+      sh.uniforms.uWet = GRASS_U.uWet;
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vGW;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGW = (modelMatrix*vec4(transformed,1.0)).xyz;");
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", `#include <common>
+          varying vec3 vGW; uniform float uWet;
+          float gH(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+          float gN(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+            return mix(mix(gH(i), gH(i+vec2(1,0)), f.x), mix(gH(i+vec2(0,1)), gH(i+vec2(1,1)), f.x), f.y); }
+          float gF(vec2 p){ float a = 0.5, s = 0.0; for(int k=0;k<4;k++){ s += a*gN(p); p *= 2.03; a *= 0.5; } return s; }`)
+        .replace("#include <map_fragment>", `#include <map_fragment>
+          {
+            vec2 gp = vGW.xz;
+            float big = gF(gp*0.09), mid = gF(gp*0.55), fine = gN(gp*9.0);
+            float inside = step(abs(vGW.x), 52.5)*step(abs(vGW.z), 34.0);
+            float stripe = mod(floor((vGW.x + 52.5)/5.8333), 2.0)*2.0 - 1.0;
+            vec3 Vd = normalize(cameraPosition - vGW);
+            float sheen = stripe*clamp(Vd.x*1.6, -1.0, 1.0)*inside;
+            diffuseColor.rgb *= (0.84 + 0.3*big)*(0.92 + 0.14*mid)*(0.95 + 0.08*fine)*(1.0 + sheen*0.13);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(0.78,0.86,0.8), uWet*0.6);
+          }`)
+        .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>
+          roughnessFactor = clamp(roughnessFactor*(0.85 + 0.3*gN(vGW.xz*1.7)) * mix(1.0, 0.42, uWet), 0.12, 1.0);`);
+    };
+    mat.customProgramCacheKey = ()=> "grass-v52";
+    mat.needsUpdate = true;
   }
 
   function buildWorld(){
@@ -424,7 +549,17 @@
     key.shadow.mapSize.set(2048,2048);
     const sc = key.shadow.camera; sc.left=-62; sc.right=62; sc.top=45; sc.bottom=-45; sc.near=20; sc.far=220;
     key.shadow.bias = -0.0006; key.shadow.normalBias = 0.03;
+    key.shadow.radius = 2.5;
     scene.add(key); world.key = key;
+    // v52 : éclairage d'environnement (PBR) pour des reflets crédibles (ballon, panneaux, maillots)
+    try{
+      if(T.PMREMGenerator && T.RoomEnvironment){
+        const pm = new T.PMREMGenerator(renderer);
+        scene.environment = pm.fromScene(new T.RoomEnvironment(), 0.04).texture;
+        scene.environmentIntensity = 0.28;
+        pm.dispose();
+      }
+    }catch(e){ console.warn("Environnement PBR indisponible", e); }
     const fill1 = new T.DirectionalLight(0xdfe8ff, 0.7); fill1.position.set(60, 70, -50); scene.add(fill1);
     const fill2 = new T.DirectionalLight(0xffffff, 0.35); fill2.position.set(0, 50, -80); scene.add(fill2);
     world.fills = [fill1, fill2];
@@ -434,6 +569,7 @@
     world.pitchTex = pt.tex;
     const pitch = new T.Mesh(new T.PlaneGeometry(pt.TW, pt.TH), new T.MeshStandardMaterial({map:pt.tex, roughness:0.92, metalness:0}));
     pitch.rotation.x = -Math.PI/2; pitch.receiveShadow = true; scene.add(pitch);
+    installGrassShader(pitch.material);
     world.pitch = pitch;
     // Pourtour (piste / béton)
     const apron = new T.Mesh(new T.PlaneGeometry(220, 170), new T.MeshStandardMaterial({color:0x22332a, roughness:1}));
@@ -488,7 +624,7 @@
     const roofMat = new T.MeshStandardMaterial({color:0xd8dde6, roughness:0.6, metalness:0.2, side:T.DoubleSide, transparent:true, opacity:0.92});
     const roofY = upTop+8;
     const roof = new T.Mesh(sweepGeometry(base, [[upEnd+1, upTop+3.5],[upEnd-6, roofY],[3, roofY+1.2]]), roofMat);
-    scene.add(roof);
+    scene.add(roof); world.roof = roof;
     // Bord intérieur du toit : rampe de projecteurs
     const glowTex = makeGlowTexture();
     world.glowTex = glowTex;
@@ -1029,6 +1165,7 @@
       scene.add(h.root); teams.all.push(h);
       return h;
     };
+    teams.mk = mk;
     for(let i=0;i<11;i++){ teams.us.push(mk("us", i, kits.us, i===0)); }
     for(let i=0;i<11;i++){ teams.them.push(mk("them", i, kits.them, i===0)); }
     const ref = makeHumanoid({shirt:"#e6ff1e", shorts:"#111111", socks:"#111111", skin:SKIN_TONES[1], hair:HAIR_TONES[4], scale:0.97});
@@ -1471,9 +1608,9 @@
       const goal = h.override || h.smoothTgt;
       const desired = _v1.subVectors(goal, h.pos); desired.y = 0;
       const dist = desired.length();
-      const piloted = !!h.ctrlVel;
       let maxSp = h.isCoach ? 1.6 : (h.isGK ? (h.override ? 6.5 : 5) : (h.override ? 8.3 : (h===teams.carrier ? 7.6 : 7.2)));
       if(h.stun > 0){ maxSp *= 0.3; h.stun = Math.max(0, h.stun - dt); }
+      if(FM.on && (h.side === "us" || h.side === "them") && !h.isCoach) maxSp *= 0.86 + 0.14*COACH.energy[h.side];   // v52 : fatigue
       // v49 : loin de l'action on trottine, près du ballon on sprinte
       if(!h.override && !h.isCoach && h !== teams.carrier){
         const dB = Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z);
@@ -1481,7 +1618,6 @@
       }
       const want = Math.min(maxSp, dist*1.6);
       if(dist>0.001) desired.multiplyScalar(want/dist);
-      if(piloted) desired.copy(h.ctrlVel);           // mode joueur : vitesse donnée par le joystick
       // accélération physiquement limitée (~7 m/s²) : plus de démarrages instantanés
       _v2.subVectors(desired, h.vel); const dv = _v2.length(), maxDv = (h.override ? 9 : 7)*dt;
       if(dv > maxDv) _v2.multiplyScalar(maxDv/dv);
@@ -1491,8 +1627,7 @@
       h.speed = h.vel.length();
       // orientation : sens de course si rapide, sinon regard vers le ballon
       let face;
-      if(piloted && !(h.faceT > 0)) face = h.heading;   // cap tenu par le joueur
-      else if(h.faceT > 0 && h.faceTo){ face = Math.atan2(h.faceTo.x-h.pos.x, h.faceTo.z-h.pos.z); h.faceT -= dt; }
+      if(h.faceT > 0 && h.faceTo){ face = Math.atan2(h.faceTo.x-h.pos.x, h.faceTo.z-h.pos.z); h.faceT -= dt; }
       else if(cur.showcase && !h.isCoach) face = 0;
       else if(h.isCoach) face = Math.atan2(bp.x-h.pos.x, bp.z-h.pos.z);
       else if(h.speed > 1.2 && h.speed < 5.5 && teams.carrier && h.side !== teams.carrier.side && !h.override && !h.isRef && !h.isLinesman
@@ -1513,9 +1648,15 @@
       h.root.position.copy(h.pos);
       h.root.rotation.y = h.heading;
       poseHumanoid(h, dt, t);
-      if(h.isCoach){ // gestes d'encouragement
-        h.armR.sh.rotation.x = -0.6 - Math.max(0, Math.sin(t*2.1))*0.9*world.excite;
-        h.armL.sh.rotation.x = -0.2;
+      if(h.isCoach){ // gestes d'encouragement ; v52 : grands gestes quand vous donnez une consigne
+        if(COACH.gesture > 0 && h === teams.coach){
+          const w = Math.sin(t*7);
+          h.armR.sh.rotation.x = -2.4 + w*0.35; h.armL.sh.rotation.x = -1.6 - w*0.5;
+          h.armR.sh.rotation.z = -0.25; h.armL.sh.rotation.z = 0.35;
+        } else {
+          h.armR.sh.rotation.x = -0.6 - Math.max(0, Math.sin(t*2.1))*0.9*world.excite;
+          h.armL.sh.rotation.x = -0.2; h.armR.sh.rotation.z = 0; h.armL.sh.rotation.z = 0;
+        }
       }
       if(h.isLinesman){ h.armR.sh.rotation.x = -0.15; }
       h.restPose = !h.isGK && !h.isRef && !h.isLinesman && Math.hypot(bp.x-h.pos.x, bp.z-h.pos.z) > 38;
@@ -1547,9 +1688,8 @@
   }
 
   // ---------------------------------------------------------------- caméra
-  const camState = {pos:new T.Vector3(0,30,90), look:new T.Vector3(), fov:30, goalCam:0, orbit:0};
+  const camState = {pos:new T.Vector3(0,30,90), look:new T.Vector3(), fov:30, goalCam:0, orbit:0, coachCam:0};
   function updateCamera(dt, t){
-    if(IM.on && IM.view !== "tv"){ imCamera(dt); return; }
     const b = world.ball.position;
     const aspect = camera.aspect;
     const narrow = aspect < 1.2;
@@ -1568,6 +1708,20 @@
       p.set(s.x + Math.sin(ang)*7, 2.4, s.z + Math.cos(ang)*7);
       l.set(s.x, 1.3, s.z); fov = 38;
       camState.goalCam -= dt;
+    } else if(camState.coachCam > 0 && teams && teams.coach && !cur.showcase){
+      // v52 : plan de coupe sur le sélectionneur (vous) qui donne ses consignes depuis la zone technique
+      modeKey = "coach";
+      const cp = teams.coach.pos;
+      p.set(cp.x + 5.5, 2.1, cp.z - 7.5); l.set(cp.x, 1.45, cp.z); fov = narrow ? 44 : 30;
+      camState.coachCam -= dt;
+    } else if(mode==="2.5D"){
+      // v52 : VUE 2.5D "maquette" — caméra très haute, inclinée à ~52°, longue focale : perspective
+      // écrasée presque isométrique, tout le bloc visible ; le flou de bascule (tilt-shift) du
+      // post-traitement (uTilt dans GRADE) renforce l'effet miniature.
+      const lim = narrow ? 16 : 26;
+      const fx = clamp(b.x*0.88, -HL+lim, HL-lim), fz = clamp(b.z*0.3, -9, 9);
+      const el = 0.95, dist = narrow ? 92 : 104;
+      p.set(fx - 5, Math.sin(el)*dist, fz + Math.cos(el)*dist); l.set(fx, 0, fz - 1.5); fov = narrow ? 30 : 18;
     } else if(mode==="TV"){
       // nacelle TV en haut de l'anneau inférieur (devant l'anneau supérieur : jamais dans le béton)
       p.set(b.x*0.8, narrow?21:17, HW+26); l.set(b.x*0.95, 0, b.z*0.4); fov = narrow?42:27;
@@ -1586,6 +1740,11 @@
     }
     if(camState.snap){ camState.pos.copy(p); camState.look.copy(l); camState.fov = fov; camState.snap = false; }
     // changement de plan franc (comme en régie) plutôt qu'un travelling qui traverserait les tribunes
+    POST.tiltTgt = (modeKey === "2.5D" || modeKey === "Tactique") ? 1 : 0;
+    if(cur.m && cur.m.showcase !== true && world.roof) world.roof.visible = modeKey !== "2.5D";   // vue maquette : toit retiré
+    if(cur.showcase && world.roof) world.roof.visible = true;
+    { const top = !cur.showcase && (modeKey === "2.5D" || modeKey === "Tactique");   // faisceaux volumétriques : faux vus de dessus
+      if(world.beams && world.beamsTop !== top){ world.beamsTop = top; world.beams.forEach(bm=> bm.visible = !!world.beamsOn && !top); } }
     if(camState.lastMode !== modeKey || camState.wasGoal !== (camState.goalCam>0)){
       camState.lastMode = modeKey; camState.wasGoal = camState.goalCam>0;
       camState.pos.copy(p); camState.look.copy(l); camState.fov = fov;
@@ -1690,7 +1849,6 @@
     const n = REC.count, first = REC.times[(REC.head - n + REC.cap) % REC.cap];
     RP.t0 = Math.max(first, RP.goalT - 4.0); RP.t1 = RP.goalT + 0.7; RP.cur = RP.t0;   // ≈ 8 s à 0,6x
     RP.on = true; RP.pendingAt = 0; RP.angle = Math.random() < 0.5 ? 0 : 1;
-    if(IM.ctrl) IM.ctrl.spine.visible = true;
     if(cur && cur.container) cur.container.classList.add("s3d-replaying");
     camState.lastMode = "replay";
   }
@@ -1698,7 +1856,6 @@
     if(!RP.on) return;
     recApply(REC.snap, 0, REC.snap, 0, 0);
     RP.on = false;
-    if(IM.on && IM.ctrl) IM.ctrl.spine.visible = IM.view !== "fp";
     if(cur && cur.container) cur.container.classList.remove("s3d-replaying");
     camState.lastMode = "fin-replay";
     lastGoalAt = clock.elapsedTime - 1.5;   // le coup d'envoi peut suivre rapidement
@@ -1718,185 +1875,195 @@
     if(Math.abs(camera.fov - 34) > 0.1){ camera.fov = 34; camera.updateProjectionMatrix(); }
   }
 
-  // ---------------------------------------------------------------- CONTRÔLE DU JOUEUR (v50)
-  // Couche de contrôle du "Match joué" (cf. FM plus bas) : joystick (avancer/tourner, poussé à fond =
-  // sprint), boutons contextuels (avec ballon : PASSE / TIR maintenu = puissance / DRIBBLE ; sans
-  // ballon : CHANGER de joueur / TACLE), vues 1re personne / 3e personne / TV.
-  const IM = {on:false, mode:null, ctrl:null, view:"fp", joy:{x:0,y:0}, keys:{}, charging:false, power:0, skillCd:0, dom:null, prevFs:false, lastInput:0};
+  // ---------------------------------------------------------------- BANC DE TOUCHE (v52)
+  // NOUVEAU CONCEPT (v52) : on ne contrôle plus AUCUN joueur. Le match est simulé en temps réel par
+  // l'IA (module FM plus bas) et l'utilisateur est le sélectionneur dans sa zone technique :
+  //   - consignes collectives en direct (mentalité, pressing, ligne défensive, tempo, largeur), qui
+  //     modifient l'IA de FM (fmShape = placement/bloc/pressing, fmCarrierAI = décisions du porteur,
+  //     fmDefend = agressivité des tacles) ;
+  //   - énergie des équipes (COACH.energy) : un pressing haut ou un tempo vertical fatiguent plus vite,
+  //     une équipe fatiguée court moins vite (updatePlayers) et perd ses duels (fmSkill) ;
+  //   - cris depuis le bord du terrain (SHOUTS, effet temporaire + temps de recharge) ;
+  //   - remplacements (crochet hooks.subs -> openSubstitutionSheet du jeu, puis S.onSub) ;
+  //   - l'adversaire a lui aussi un entraîneur IA (coachAI) qui adapte ses consignes au score.
   S.canInteract = (m)=> !!(cur && cur.m === m && teams && !cur.showcase && renderer);
-  S.interactiveActive = ()=> IM.on;
-  function imSetCtrl(h){
-    if(!h) return;
-    if(IM.ctrl && IM.ctrl !== h){ IM.ctrl.spine.visible = true; IM.ctrl.ctrlVel = null; }
-    IM.ctrl = h; h.override = null; h.spine.visible = IM.view !== "fp";
-    if(IM.dom){ const n = IM.dom.querySelector(".im-who"); if(n) n.textContent = h.backLabel || ""; }
+  S.interactiveActive = ()=> false;
+  const TAC_DEF = {ment:0, press:1, line:1, tempo:1, width:1};
+  const TAC_ROWS = [
+    ["ment",  "Mentalité",  [[-2,"Bus"],[-1,"Prudent"],[0,"Équilibré"],[1,"Offensif"],[2,"Tout attaque"]]],
+    ["press", "Pressing",   [[0,"Bas"],[1,"Médian"],[2,"Haut"]]],
+    ["line",  "Ligne déf.", [[0,"Basse"],[1,"Normale"],[2,"Haute"]]],
+    ["tempo", "Tempo",      [[0,"Patient"],[1,"Normal"],[2,"Vertical"]]],
+    ["width", "Largeur",    [[0,"Axe"],[1,"Normale"],[2,"Large"]]],
+  ];
+  const SHOUTS = {
+    pousser:   {label:"📣 On pousse !",       say:"Le sélectionneur fait de grands gestes : il demande à ses joueurs de pousser !"},
+    concentre: {label:"🧠 Concentration !",   say:"Le sélectionneur rappelle ses joueurs à l'ordre : concentration derrière !"},
+    calme:     {label:"🤚 On calme le jeu",   say:"Le sélectionneur demande de calmer le jeu et de garder le ballon."},
+  };
+  const SHOUT_DUR = 6*60, SHOUT_CD = 9*60;        // en secondes de match
+  const COACH = {tac:{us:{...TAC_DEF}, them:{...TAC_DEF}}, energy:{us:1, them:1}, shout:{us:null, them:null}, cdUntil:0,
+    dom:null, open:false, aiNext:0, gesture:0};
+  function styleToTac(key){
+    switch(key){
+      case "offensif":   return {ment:1,  press:2, line:2, tempo:2, width:2};
+      case "defensif":   return {ment:-1, press:0, line:0, tempo:1, width:0};
+      case "possession": return {ment:0,  press:1, line:1, tempo:0, width:2};
+      case "contre":     return {ment:-1, press:1, line:0, tempo:2, width:1};
+      default:           return {...TAC_DEF};
+    }
   }
-  function userHasBall(){ return IM.ctrl && BS.carrier === IM.ctrl && !BS.inHands; }
-  function userPass(){
-    const c = IM.ctrl; if(!userHasBall() || FM.pendingKick || (act && act.kind==="shot")) return;
-    fwdOf(c, _f);
-    let best = null, bs = -1e9;
-    teams.us.forEach((h,i)=>{
-      if(i===0 || h===c) return;
-      const dx = h.pos.x-c.pos.x, dz = h.pos.z-c.pos.z, d = Math.hypot(dx,dz) || 1;
-      const sc = (dx*_f.x + dz*_f.z)/d*2.2 - d/35 + (dx>0 ? 0.25 : 0);
-      if(d > 3 && d < 50 && sc > bs){ bs = sc; best = h; }
+  // consignes effectives (les cris modifient temporairement la consigne de base)
+  function tac(side){
+    const t = COACH.tac[side], sh = COACH.shout[side];
+    if(!sh) return t;
+    const o = {...t};
+    if(sh.kind === "pousser") o.ment = Math.min(2, o.ment + 1);
+    if(sh.kind === "calme"){ o.tempo = Math.max(0, o.tempo - 1); o.ment = Math.max(-2, o.ment - 1); }
+    return o;
+  }
+  // bonus/malus de compétence liés à l'énergie, aux cris et au plan de jeu
+  function sideMod(side){
+    const e = COACH.energy[side], sh = COACH.shout[side];
+    let att = (e - 0.8)*28, def = (e - 0.8)*24;
+    if(sh && sh.kind === "pousser") att += 6;
+    if(sh && sh.kind === "concentre") def += 8;
+    if(side === "us" && FM.m){ const tm = FM.m.tacticMod || 0; att += tm*1.5; def += tm*1.5; }
+    return {att, def};
+  }
+  function coachSay(text, important){ if(FM.hooks && FM.hooks.event) FM.hooks.event(text, important); }
+  S.getTactics = ()=> ({...COACH.tac.us});
+  S.setTactic = function(key, val){
+    if(!FM.on || !(key in TAC_DEF)) return;
+    const old = COACH.tac.us[key]; if(old === val) return;
+    COACH.tac.us[key] = val;
+    const row = TAC_ROWS.find(r=> r[0] === key), lab = row ? (row[2].find(o=> o[0] === val) || [0,""])[1] : "";
+    coachSay(`📋 Consigne du sélectionneur : ${row ? row[1].toLowerCase() : key} → ${lab}.`);
+    COACH.gesture = 1.6;
+    updateCoachUI();
+  };
+  S.shout = function(kind){
+    if(!FM.on || !SHOUTS[kind] || FM.clock < COACH.cdUntil) return false;
+    COACH.shout.us = {kind, until: FM.clock + SHOUT_DUR};
+    COACH.cdUntil = FM.clock + SHOUT_CD;
+    COACH.gesture = 2.6; camState.coachCam = 2.4;
+    coachSay("🗣️ " + SHOUTS[kind].say, true);
+    try{ if(typeof SFX !== "undefined" && SFX.crowdBurst) SFX.crowdBurst(true, false); }catch(e){}
+    updateCoachUI();
+    return true;
+  };
+  // entraîneur adverse : adapte ses consignes au score et au temps de jeu
+  function coachAI(){
+    if(FM.clock < COACH.aiNext) return;
+    COACH.aiNext = FM.clock + 5*60;
+    const m = FM.m, min = FM.clock/60, diff = m.them - m.us;          // du point de vue adverse
+    const base = styleToTac((m.oppTactique && m.oppTactique.style) || "equilibre");
+    let t = {...base};
+    if(diff < 0 && min > 55){ t.ment = Math.min(2, base.ment + (min > 75 ? 2 : 1)); t.press = 2; t.line = 2; t.tempo = 2; }
+    else if(diff > 0 && min > 65){ t.ment = Math.max(-2, base.ment - (min > 80 ? 2 : 1)); t.line = 0; t.press = Math.min(base.press, 1); t.tempo = 0; }
+    if(COACH.energy.them < 0.62){ t.press = Math.min(t.press, 1); }
+    const changed = Object.keys(t).some(k=> t[k] !== COACH.tac.them[k]);
+    COACH.tac.them = t;
+    if(changed && min > 50 && Math.random() < 0.7){
+      coachSay(t.ment > base.ment ? `L'entraîneur de ${m.opp} lance toutes ses forces vers l'avant !` : t.ment < base.ment ? `${m.opp} recule et ferme le jeu pour préserver le score.` : `Le banc de ${m.opp} réorganise son équipe.`);
+    }
+    // un cri de temps en temps sur le banc adverse
+    if(!COACH.shout.them && Math.random() < 0.15){ COACH.shout.them = {kind: diff < 0 ? "pousser" : "concentre", until: FM.clock + SHOUT_DUR}; }
+  }
+  // énergie : baisse continue, plus vite avec pressing / tempo / mentalité offensive
+  function coachUpdate(gameDt){
+    const gm = gameDt/60;
+    ["us","them"].forEach(sd=>{
+      const t = tac(sd);
+      const rate = 0.0021 + t.press*0.0012 + t.tempo*0.0005 + Math.max(0, t.ment)*0.0004 - (t.press === 0 ? 0.0004 : 0);
+      COACH.energy[sd] = clamp(COACH.energy[sd] - rate*gm, 0.35, 1);
+      const sh = COACH.shout[sd]; if(sh && FM.clock > sh.until) COACH.shout[sd] = null;
     });
-    if(!best) return;
-    FM.lastPasser = c;
-    fmPass(c, best, Math.hypot(best.pos.x-c.pos.x, best.pos.z-c.pos.z) > 30 || IM.charging);
+    coachAI();
+    if((COACH.uiT = (COACH.uiT||0) + gameDt) > 20){ COACH.uiT = 0; updateCoachUI(); }
   }
-  function userShoot(power){
-    const c = IM.ctrl; if(!userHasBall() || (act && act.kind==="shot")) return;
-    const dirx = Math.sin(c.heading), dirz = Math.cos(c.heading);
-    let zAim = dirx < 0.15 ? (c.pos.z > 0 ? 1 : -1)*rnd(6,14) : c.pos.z + dirz*(HL - c.pos.x)/dirx;
-    const yAim = 0.25 + power*1.9 + Math.max(0, power-0.85)*9;
-    fmShoot(c, Math.min(1, power), zAim, yAim);
-    if(FM.hooks && FM.hooks.event) FM.hooks.event(power > 0.85 ? `Frappe surpuissante de ${c.backLabel} !` : `${c.backLabel} tente sa chance !`);
-  }
-  function imSkill(){
-    const c = IM.ctrl;
-    if(!userHasBall() || IM.skillCd > 0) return;
-    IM.skillCd = 1.4;
-    const dir = Math.random()<0.5 ? -1 : 1;                           // +1 = crochet vers la droite du joueur
-    const kinds = ["crochet","passement","roulette"], kind = kinds[(Math.random()*3)|0];
-    c.feint = {t:0, dir:-dir, kind}; BS.lat = -dir*1.15; c.heading -= dir*0.35;
-    let near = null, nd = 3.2;
-    teams.them.forEach((h,i)=>{ if(i===0) return; const d = Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z); if(d < nd){ nd = d; near = h; } });
-    if(near && Math.random() < 0.5 + (fmSkill("us", c.idx).att - fmSkill("them", near.idx).def)/180){
-      near.stun = 1.3;
-      if(FM.hooks && FM.hooks.event) FM.hooks.event(kind==="roulette" ? `Roulette de ${c.backLabel}, ${near.backLabel} est éliminé !` : kind==="passement" ? `Passement de jambes de ${c.backLabel} !` : `Crochet de ${c.backLabel}, ${near.backLabel} est dans le vent !`);
-    }
-  }
-  function imControl(dt){
-    IM.skillCd = Math.max(0, IM.skillCd - dt);
-    const c = IM.ctrl; if(!c) return;
-    const k = IM.keys;
-    const kx = (k.ArrowRight||k.d ? 1 : 0) - (k.ArrowLeft||k.q||k.a ? 1 : 0), ky = (k.ArrowUp||k.z||k.w ? 1 : 0) - (k.ArrowDown||k.s ? 1 : 0);
-    const jx = clamp(IM.joy.x + kx, -1, 1), jy = clamp(IM.joy.y + ky, -1, 1);
-    if(jx || jy || IM.charging) IM.lastInput = 0; else IM.lastInput += dt;
-    FM.idle = IM.lastInput;
-    if(IM.charging) IM.power = Math.min(1.15, IM.power + dt*0.95);
-    const has = userHasBall();
-    if(IM.dom){
-      const pb = IM.dom.querySelector(".im-power i"); if(pb) pb.style.width = Math.min(100, IM.power/1.15*100) + "%";
-      if(IM.dom.dataset.has !== String(has)){
-        IM.dom.dataset.has = String(has);
-        IM.dom.querySelector('[data-im="pass"]').firstChild.textContent = has ? "PASSE" : "CHANGER";
-        IM.dom.querySelector('[data-im="shoot"]').firstChild.textContent = has ? "TIR" : "TACLE";
-        IM.dom.querySelector('[data-im="skill"]').style.visibility = has ? "visible" : "hidden";
-      }
-    }
-    if(c.stun > 0){ c.ctrlVel = new T.Vector3(0,0,0); return; }
-    // sans consigne depuis un moment et sans ballon : l'IA replace le joueur
-    if(!has && IM.lastInput > 1.2){ c.ctrlVel = null; return; }
-    // v51 : le joystick donne DIRECTEMENT la direction sur le terrain (plus besoin de tourner en avançant).
-    // Vues 1re/3e personne : haut = vers le but adverse, droite = côté droit du terrain (sens d'attaque).
-    // Vue TV : haut = vers le haut de l'écran (fond du terrain), droite = vers la droite de l'écran.
-    const mag = Math.min(1, Math.hypot(jx, jy));
-    if(mag < 0.12){ c.ctrlVel = new T.Vector3(0,0,0); c.override = null; return; }
-    let wx, wz;
-    if(IM.view === "tv"){ wx = jx; wz = -jy; } else { wx = jy; wz = jx; }   // nous attaquons vers +X, la droite est +Z
-    const want = Math.atan2(wx, wz);
-    let dh = want - c.heading; while(dh > Math.PI) dh -= Math.PI*2; while(dh < -Math.PI) dh += Math.PI*2;
-    const turnRate = has ? 7 : 10;                                   // on tourne vite, un peu moins ballon au pied
-    c.heading += clamp(dh, -turnRate*dt, turnRate*dt);
-    const sp = mag*(mag > 0.92 ? 8.6 : 6.6) * (has ? 0.92 : 1) * (Math.abs(dh) > 1.6 ? 0.45 : 1);   // demi-tour : on freine
-    c.ctrlVel = new T.Vector3(Math.sin(c.heading)*sp, 0, Math.cos(c.heading)*sp);
-    c.override = null;
-  }
-  function imCamera(dt){
-    const c = IM.ctrl; if(!c) return;
-    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
-    let p, l, fov;
-    if(IM.view === "fp"){
-      const has = BS.carrier === c;
-      // vue à la 1re personne : le haut du corps du joueur est masqué (on voit ses jambes et le ballon)
-      p = _g.set(c.pos.x + fx*0.08, 1.66*(c.root.scale.y||1) + c.body.position.y, c.pos.z + fz*0.08);
-      l = _f.set(c.pos.x + fx*7, has ? -2.7 : 0.2, c.pos.z + fz*7);
-      fov = camera.aspect < 1 ? 92 : 74;
-      camState.pos.copy(p); camState.look.lerp(l, camState.lastMode==="im-start" ? 1 : damp(10, dt));
-    } else {
-      p = _g.set(c.pos.x - fx*5.5, 2.7, c.pos.z - fz*5.5);
-      l = _f.set(c.pos.x + fx*8, 0.6, c.pos.z + fz*8);
-      fov = camera.aspect < 1 ? 70 : 55;
-      camState.pos.lerp(p, camState.lastMode==="im-start" ? 1 : damp(8, dt)); camState.look.lerp(l, camState.lastMode==="im-start" ? 1 : damp(8, dt));
-    }
-    camState.lastMode = "im";
-    camera.position.copy(camState.pos); camera.lookAt(camState.look);
-    if(Math.abs(camera.fov - fov) > 0.1){ camera.fov = fov; camera.updateProjectionMatrix(); }
-  }
-  const VIEW_LABEL = {fp:"👁 1re pers.", tp:"🎥 3e pers.", tv:"📺 TV"};
-  function buildImControls(){
-    if(IM.dom) IM.dom.remove();
+  S.coachState = ()=> ({tac:{...COACH.tac.us}, them:{...COACH.tac.them}, energy:{...COACH.energy}, shout:COACH.shout.us && COACH.shout.us.kind, cd:Math.max(0, COACH.cdUntil - FM.clock)});
+  function buildCoachUI(){
+    if(COACH.dom) COACH.dom.remove();
+    if(!cur || !cur.container) return;
     const d = document.createElement("div");
-    d.className = "im-ui";
+    d.className = "cz" + (COACH.open ? " open" : "");
     d.innerHTML = `
-      <div class="im-top"><span class="im-badge">🎮 <span class="im-who">${(IM.ctrl && IM.ctrl.backLabel) || ""}</span></span>
-        <button class="im-small" data-im="view">${VIEW_LABEL[IM.view]}</button>
-        <button class="im-small" data-im="pause">⏸</button></div>
-      <div class="im-joy"><div class="im-knob"></div></div>
-      <div class="im-btns">
-        <button class="im-btn im-skill" data-im="skill">DRIBBLE</button>
-        <button class="im-btn im-pass" data-im="pass">PASSE</button>
-        <button class="im-btn im-shoot" data-im="shoot">TIR<span class="im-power"><i></i></span></button>
+      <div class="cz-bar">
+        <button class="cz-main" data-cz="open">📋 <span>Consignes</span></button>
+        <div class="cz-en"><span>⚡</span><div class="cz-en-track"><i data-cz-en="us"></i></div><b data-cz-ent="us"></b></div>
+        <button class="cz-sm" data-cz="subs" title="Remplacements">🔄</button>
       </div>
-      <div class="im-paused">⏸ PAUSE<small>Touchez ⏸ pour reprendre</small></div>
-      <div class="im-tip">Joystick = direction : ↑ vers le but adverse</div>`;
+      <div class="cz-drawer">
+        <div class="cz-head"><b>Zone technique</b><span data-cz-plan></span><button class="cz-x" data-cz="open">✕</button></div>
+        ${TAC_ROWS.map(([k, lab, opts])=>`<div class="cz-row"><span class="cz-lab">${lab}</span><div class="cz-seg" data-cz-k="${k}">${opts.map(([v, l])=>`<button data-v="${v}">${l}</button>`).join("")}</div></div>`).join("")}
+        <div class="cz-row cz-shouts">${Object.entries(SHOUTS).map(([k, o])=>`<button class="cz-shout" data-cz-shout="${k}">${o.label}</button>`).join("")}</div>
+        <div class="cz-foot"><span>Adversaire ⚡ <b data-cz-ent="them"></b></span><span data-cz-cd></span></div>
+      </div>`;
     cur.container.appendChild(d);
-    IM.dom = d;
-    const joy = d.querySelector(".im-joy"), knob = d.querySelector(".im-knob");
-    let pid = null;
-    const setJ = (e)=>{
-      const r = joy.getBoundingClientRect(), cx = r.left + r.width/2, cy = r.top + r.height/2, R = r.width/2;
-      let x = (e.clientX - cx)/R, y = (cy - e.clientY)/R; const mg = Math.hypot(x,y); if(mg > 1){ x/=mg; y/=mg; }
-      IM.joy.x = x; IM.joy.y = y; knob.style.transform = `translate(${x*R*0.6}px, ${-y*R*0.6}px)`;
-    };
-    joy.addEventListener("pointerdown", e=>{ e.preventDefault(); e.stopPropagation(); pid = e.pointerId; joy.setPointerCapture(pid); setJ(e); });
-    joy.addEventListener("pointermove", e=>{ if(e.pointerId === pid) setJ(e); });
-    const rel = e=>{ if(e.pointerId !== pid) return; pid = null; IM.joy.x = 0; IM.joy.y = 0; knob.style.transform = ""; };
-    joy.addEventListener("pointerup", rel); joy.addEventListener("pointercancel", rel);
-    const sb = d.querySelector('[data-im="shoot"]');
-    sb.addEventListener("pointerdown", e=>{ e.preventDefault(); e.stopPropagation(); if(userHasBall()){ IM.charging = true; IM.power = 0.1; } else fmUserTackle(); });
-    const fire = ()=>{ if(!IM.charging) return; IM.charging = false; userShoot(Math.min(1.15, IM.power)); IM.power = 0; };
-    sb.addEventListener("pointerup", fire); sb.addEventListener("pointerleave", fire); sb.addEventListener("pointercancel", fire);
-    d.querySelector('[data-im="pass"]').addEventListener("pointerdown", e=>{ e.preventDefault(); e.stopPropagation(); if(userHasBall()) userPass(); else fmSwitch(); });
-    d.querySelector('[data-im="skill"]').addEventListener("pointerdown", e=>{ e.preventDefault(); e.stopPropagation(); imSkill(); });
-    d.querySelector('[data-im="pause"]').onclick = (e)=>{ e.stopPropagation(); FM.paused = !FM.paused; d.classList.toggle("paused", FM.paused); };
-    d.querySelector('[data-im="view"]').onclick = (e)=>{ e.stopPropagation(); cycleView(); e.target.textContent = VIEW_LABEL[IM.view]; };
+    COACH.dom = d;
+    const stop = (e)=> e.stopPropagation();
+    d.addEventListener("click", stop); d.addEventListener("pointerdown", stop);
+    d.querySelectorAll('[data-cz="open"]').forEach(b=> b.onclick = ()=>{ COACH.open = !COACH.open; d.classList.toggle("open", COACH.open); updateCoachUI(); });
+    d.querySelector('[data-cz="subs"]').onclick = ()=>{ if(FM.hooks && FM.hooks.subs){ if(fsOn){ fsOn = false; applyFs(); } FM.hooks.subs(); } };
+    d.querySelectorAll("[data-cz-k]").forEach(seg=> seg.querySelectorAll("button").forEach(b=> b.onclick = ()=> S.setTactic(seg.dataset.czK, +b.dataset.v)));
+    d.querySelectorAll("[data-cz-shout]").forEach(b=> b.onclick = ()=> S.shout(b.dataset.czShout));
+    updateCoachUI();
   }
-  function cycleView(){
-    IM.view = IM.view==="fp" ? "tp" : IM.view==="tp" ? "tv" : "fp"; setPref("sel-imview", IM.view);
-    if(IM.ctrl) IM.ctrl.spine.visible = IM.view !== "fp"; camState.lastMode = "im-start";
+  function updateCoachUI(){
+    const d = COACH.dom; if(!d || !d.isConnected) return;
+    const t = COACH.tac.us;
+    d.querySelectorAll("[data-cz-k]").forEach(seg=> seg.querySelectorAll("button").forEach(b=> b.classList.toggle("on", +b.dataset.v === t[seg.dataset.czK])));
+    ["us","them"].forEach(sd=>{
+      const e = Math.round(COACH.energy[sd]*100);
+      const bar = d.querySelector(`[data-cz-en="${sd}"]`); if(bar){ bar.style.width = e + "%"; bar.style.background = e > 70 ? "#3ddc84" : e > 50 ? "#ffc53d" : "#ff5a5a"; }
+      d.querySelectorAll(`[data-cz-ent="${sd}"]`).forEach(x=> x.textContent = e + "%");
+    });
+    const cd = Math.max(0, COACH.cdUntil - FM.clock);
+    d.querySelectorAll("[data-cz-shout]").forEach(b=>{ b.disabled = cd > 0; b.classList.toggle("on", !!(COACH.shout.us && COACH.shout.us.kind === b.dataset.czShout)); });
+    const cdEl = d.querySelector("[data-cz-cd]"); if(cdEl) cdEl.textContent = cd > 0 ? `Prochain cri dans ${Math.ceil(cd/60)}'` : "Cris disponibles";
+    const plan = d.querySelector("[data-cz-plan]");
+    if(plan){ const th = COACH.tac.them; plan.textContent = `${FM.m ? FM.m.opp : "Adversaire"} : ${th.ment > 0 ? "offensif" : th.ment < 0 ? "replié" : "équilibré"}, pressing ${["bas","médian","haut"][th.press]}`; }
+    const sb = d.querySelector('[data-cz="subs"]'); if(sb && FM.m) sb.disabled = !!(FM.m.subsUsed >= FM.m.subsMax);
   }
-  // clavier (ordinateur) : flèches/ZQSD, Espace = passe/changer, J maintenu = tir/tacle, K = dribble, V = vue, P = pause
-  window.addEventListener("keydown", e=>{
-    if(!IM.on) return;
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if(k === " "){ e.preventDefault(); if(userHasBall()) userPass(); else fmSwitch(); return; }
-    if(k === "j"){ if(e.repeat) return; if(userHasBall()){ if(!IM.charging){ IM.charging = true; IM.power = 0.1; } } else fmUserTackle(); return; }
-    if(k === "k"){ imSkill(); return; }
-    if(k === "v"){ cycleView(); return; }
-    if(k === "p"){ FM.paused = !FM.paused; if(IM.dom) IM.dom.classList.toggle("paused", FM.paused); return; }
-    IM.keys[k] = true; if(k.startsWith("Arrow")) e.preventDefault();
-  });
-  window.addEventListener("keyup", e=>{
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if(k === "j" && IM.charging){ IM.charging = false; userShoot(Math.min(1.15, IM.power)); IM.power = 0; return; }
-    IM.keys[k] = false;
-  });
+  // remplacement en cours de match : on remplace le personnage (nom au dos, apparence) sans casser l'ordre
+  S.onSub = function(m, idx){
+    if(!teams || !cur || cur.m !== m || !teams.mk) return;
+    const old = teams.us[idx]; if(!old) return;
+    const nh = teams.mk("us", idx, teams.kits.us, idx === 0);
+    teams.all.pop();
+    const k = teams.all.indexOf(old); if(k >= 0) teams.all[k] = nh;
+    teams.us[idx] = nh;
+    nh.pos.copy(old.pos); nh.tgt.copy(old.tgt); nh.smoothTgt.copy(old.smoothTgt); nh.heading = old.heading; nh.override = old.override;
+    if(BS.carrier === old) BS.carrier = nh;
+    if(teams.carrier === old) teams.carrier = nh;
+    if(FM.passTo === old) FM.passTo = null;
+    scene.remove(old.root);
+    COACH.energy.us = Math.min(1, COACH.energy.us + 0.035);
+    updateCoachUI();
+  };
+  S.resumeHalf = function(m, opts){
+    if(!FM.on || FM.m !== m) return;
+    opts = opts || {};
+    if(opts.style && opts.style !== COACH.style){ COACH.tac.us = styleToTac(opts.style); COACH.style = opts.style; }   // nouveau style choisi au vestiaire
+    if(opts.talk) COACH.energy.us = Math.min(1, COACH.energy.us + 0.04);
+    FM.waitHalf = false; FM.stateT = Math.max(FM.stateT, 3);
+    updateCoachUI();
+  };
 
-  // ---------------------------------------------------------------- MATCH JOUÉ EN ENTIER (v50)
-  // Mode "Match joué" : plus de moteur probabiliste. Le match est simulé EN TEMPS RÉEL dans le
-  // stade 3D : 21 joueurs pilotés par l'IA + 1 joueur contrôlé par l'utilisateur (1re personne).
+  // ---------------------------------------------------------------- MATCH EN TEMPS RÉEL (v50, v52)
+  // Plus de moteur probabiliste : le match est simulé EN TEMPS RÉEL dans le stade 3D, les 22 joueurs
+  // sont pilotés par l'IA (v52 : plus aucun joueur contrôlé, l'utilisateur dirige depuis le banc, cf.
+  // COACH plus haut).
   // Le score, les tirs, les passes et la possession viennent de ce qui se passe sur la pelouse.
   // Les crochets "hooks" (fournis par index.html) répercutent tout dans l'objet match du jeu.
   const FM = {on:false, m:null, hooks:null, clock:0, dur:600, half:1, state:"play", stateT:0, lastTouch:"us", poss:{us:1,them:1},
     added:0, lastMin:-1, kickSide:"us", restart:null, decideT:new Map(), idle:0, switchT:0, paused:false, shotPending:null, goalWait:0};
   function fmSkill(side, idx){
     const m = FM.m;
-    if(side === "us"){ const p = m.usOrder && m.usOrder[idx]; return p ? {att:p.attaque, def:p.defense} : {att:50, def:50}; }
-    const s = m.oppStrength || 65; return {att:s + (idx>=9?6:idx>=5?0:-10), def:s + (idx<=4?6:idx>=9?-12:0)};
+    const md = sideMod(side);
+    if(side === "us"){ const p = m.usOrder && m.usOrder[idx]; return p ? {att:p.attaque + md.att, def:p.defense + md.def} : {att:50 + md.att, def:50 + md.def}; }
+    const s = m.oppStrength || 65; return {att:s + (idx>=9?6:idx>=5?0:-10) + md.att, def:s + (idx<=4?6:idx>=9?-12:0) + md.def};
   }
   function fmBase(side, i){
     // positions de base issues de la formation choisie (nous) / 4-4-2 adverse, en mètres
@@ -1910,30 +2077,28 @@
     if(!S.canInteract(m)) return false;
     if(FM.on && FM.m === m){
       FM.hooks = hooks;
-      if(!IM.dom || !IM.dom.isConnected) buildImControls();
-      cur.container.classList.add("s3d-im"); if(!fsOn){ fsOn = true; applyFs(); }
+      buildCoachUI(); cur.container.classList.add("s3d-coach");
       return true;
     }
-    FM.on = true; FM.m = m; FM.hooks = hooks;
+    FM.on = true; FM.m = m; FM.hooks = hooks; FM.waitHalf = false;
+    // v52 : consignes de départ = style choisi avant le match ; adversaire selon son plan de jeu
+    COACH.tac.us = styleToTac(m.styleKey); COACH.style = m.styleKey; COACH.tac.them = styleToTac((m.oppTactique && m.oppTactique.style) || "equilibre");
+    COACH.energy = {us:1, them:1}; COACH.shout = {us:null, them:null}; COACH.cdUntil = 0; COACH.aiNext = 0; COACH.open = false;
     const key = (typeof matchPaceKey === "function") ? matchPaceKey() : "normal";
     FM.dur = key === "rapide" ? 360 : key === "reel" ? 960 : 600;
     FM.clock = (m.minute||0)*60; FM.half = FM.clock >= 45*60 ? 2 : 1; FM.added = 60 + Math.random()*180;
     FM.poss = {us:1, them:1}; FM.lastMin = m.minute||0; FM.paused = false; FM.shotPending = null; FM.restart = null;
-    IM.mode = "full"; IM.on = true; IM.view = pref("sel-imview", "fp"); IM.shotOutcome = null; IM.windup = 0; IM.pendingPass = null; IM.events = null;
     queue = []; act = null; pendingGoal = null;
-    IM.prevFs = fsOn; if(!fsOn){ fsOn = true; applyFs(); }
     fmKickoff(FM.half === 2 ? "them" : "us");
-    imSetCtrl(teams.us[9]);
-    buildImControls();
-    cur.container.classList.add("s3d-im");
+    buildCoachUI();
+    cur.container.classList.add("s3d-coach");
     return true;
   };
   function fmStop(){
-    FM.on = false; IM.on = false; IM.mode = null;
-    teams.all.forEach(h=>{ h.override = null; h.ctrlVel = null; h.headG.visible = true; h.spine.visible = true; });
-    if(IM.dom){ IM.dom.remove(); IM.dom = null; }
-    if(cur && cur.container) cur.container.classList.remove("s3d-im");
-    if(!IM.prevFs){ fsOn = false; applyFs(); }
+    FM.on = false;
+    teams.all.forEach(h=>{ h.override = null; });
+    if(COACH.dom){ COACH.dom.remove(); COACH.dom = null; }
+    if(cur && cur.container) cur.container.classList.remove("s3d-coach");
     camState.lastMode = "fm-end";
   }
   function fmResetShape(){
@@ -1955,7 +2120,6 @@
     giveTo(taker, {silent:true}); fmTouch(taker);
     FM.decideT.set(taker, 0.9);
     FM.state = "play"; FM.stateT = 0;
-    if(side === "us") imSetCtrl(taker);
   }
   // ----- décisions du porteur IA
   function fmLaneSafety(from, to, oppSide){
@@ -2018,11 +2182,12 @@
     c.override = new T.Vector3(clamp(tx, -HL+2, HL-2), 0, clamp(tz, -HW+2, HW-2));
     if(c.isGK){ t = Math.min(t, 1.2); }
     if(t > 0){ FM.decideT.set(c, t); return; }
-    FM.decideT.set(c, rnd(0.45, 0.9) * (pressure < 3 ? 0.6 : 1));
+    const tc = tac(c.side);                                   // v52 : consignes du banc
+    FM.decideT.set(c, rnd(0.45, 0.9) * (pressure < 3 ? 0.6 : 1) * [1.4, 1, 0.68][tc.tempo]);
     const sk = fmSkill(c.side, c.idx);
     // 1) frappe
     if(!c.isGK && distGoal < 27 && Math.abs(c.pos.z) < 22 && (c.pos.x - goalX)*d < 0){
-      const p = distGoal < 11 ? 0.85 : distGoal < 17 ? 0.5 : 0.17;
+      const p = (distGoal < 11 ? 0.85 : distGoal < 17 ? 0.5 : 0.17) * (1 + tc.ment*0.16);
       if(Math.random() < p * (0.8 + sk.att/250)){
         const z = rnd(-1,1)*(GOAL_W/2 - 0.5), y = rnd(0.25, 1.9);
         faceTo(c, goalX, z, 0.4);
@@ -2035,12 +2200,13 @@
       if(h === c || (i === 0 && !c.isGK && Math.random() < 0.9)) return;
       const dist = Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z); if(dist < 4 || dist > 45) return;
       const prog = (h.pos.x - c.pos.x)*d, open = fmNearestOpp(h).d, lane = fmLaneSafety(c.pos, h.pos, oppSide);
-      const sc = prog*0.07 + Math.min(open, 8)*0.22 + Math.min(lane, 5)*0.45 - dist*0.025 + rnd(0, 0.9);
+      const sc = prog*(0.07 + tc.ment*0.015 + (tc.tempo-1)*0.025) + Math.min(open, 8)*0.22 + Math.min(lane, 5)*(tc.tempo === 0 ? 0.62 : 0.45)
+        - dist*(tc.tempo === 2 ? 0.012 : 0.025) + (tc.width === 2 ? Math.abs(h.pos.z)*0.012 : tc.width === 0 ? -Math.abs(h.pos.z)*0.01 : 0) + rnd(0, 0.9);
       if(sc > bs){ bs = sc; best = h; }
     });
     const mustRelease = c.isGK || pressure < 2.2;
-    if(best && (mustRelease || bs > 1.6 || Math.random() < 0.35)){
-      const far = Math.hypot(best.pos.x-c.pos.x, best.pos.z-c.pos.z) > 28 || fmLaneSafety(c.pos, best.pos, oppSide) < 1.5;
+    if(best && (mustRelease || bs > 1.6 - (tc.tempo-1)*0.3 || Math.random() < [0.45, 0.35, 0.3][tc.tempo])){
+      const far = Math.hypot(best.pos.x-c.pos.x, best.pos.z-c.pos.z) > (tc.tempo === 2 ? 22 : 28) || fmLaneSafety(c.pos, best.pos, oppSide) < 1.5;
       FM.lastPasser = c;
       return fmPass(c, best, far);
     }
@@ -2053,23 +2219,31 @@
     const b = world.ball.position, c = BS.carrier;
     const possSide = c ? c.side : FM.lastTouch;
     ["us","them"].forEach(sd=>{
-      const d = attackDir(sd), team = teamArr(sd), att = possSide === sd;
-      const teamX = att ? b.x - d*10 : b.x - d*20;
+      const d = attackDir(sd), team = teamArr(sd), att = possSide === sd, tc = tac(sd);
+      // v52 : hauteur du bloc selon la mentalité, la ligne défensive et le pressing demandés par le banc
+      const push = tc.ment*2.6;
+      let teamX = att ? b.x - d*(10 - push) : b.x - d*(20 - push - (tc.line-1)*4.5 - (tc.press-1)*2.5);
+      if(!att && tc.line === 0) teamX = d > 0 ? Math.min(teamX, -6) : Math.max(teamX, 6);   // bloc bas : on reste dans sa moitié
+      const widthF = [0.8, 1.0, 1.22][tc.width];
       const opp = teamArr(sd==="us"?"them":"us");
-      // pressing : le plus proche du porteur adverse presse, le 2e couvre
+      // pressing : 1 à 3 joueurs selon la consigne ; en pressing bas, on attend le porteur dans sa moitié
       let pressers = [];
-      if(c && c.side !== sd) pressers = team.filter((h,i)=> i>0).sort((a,bb)=> Math.hypot(a.pos.x-c.pos.x,a.pos.z-c.pos.z) - Math.hypot(bb.pos.x-c.pos.x,bb.pos.z-c.pos.z)).slice(0,2);
+      const inOwnHalf = c && (c.pos.x*d) < 0;
+      const nPress = [1, 2, 3][tc.press];
+      const tight = tc.press > 0 || inOwnHalf;
+      if(c && c.side !== sd) pressers = team.filter((h,i)=> i>0).sort((a,bb)=> Math.hypot(a.pos.x-c.pos.x,a.pos.z-c.pos.z) - Math.hypot(bb.pos.x-c.pos.x,bb.pos.z-c.pos.z)).slice(0, nPress);
       team.forEach((h,i)=>{
-        if(h === c || (IM.ctrl === h && FM.idle < 1.2) || (FM.passTo === h && BS.mode === "flight")) return;
+        if(h === c || (FM.passTo === h && BS.mode === "flight")) return;
         if(i === 0){
           const gx = -d*HL, dx = b.x - gx, dz = b.z, dd = Math.hypot(dx,dz)||1, out = clamp(dd*0.06, 0.8, 5);
           h.override = new T.Vector3(gx + dx/dd*out, 0, clamp(dz/dd*out*1.4, -GOAL_W/2+0.3, GOAL_W/2-0.3)); return;
         }
-        if(pressers[0] === h){ h.override = new T.Vector3(c.pos.x - d*0.6, 0, c.pos.z); return; }
+        if(pressers[0] === h){ h.override = new T.Vector3(c.pos.x - d*(tight ? 0.6 : 5), 0, c.pos.z); return; }
         if(pressers[1] === h){ h.override = new T.Vector3(c.pos.x - d*6, 0, c.pos.z*0.7); return; }
+        if(pressers[2] === h){ h.override = new T.Vector3(c.pos.x - d*2.5, 0, c.pos.z + (c.pos.z > 0 ? -4 : 4)); return; }   // pressing haut : on coupe la passe latérale
         const base = fmBase(sd, i);
         let x = teamX + (base.x - d*(HL*0.25))*(att ? 0.75 : 0.55);
-        let z = base.z*(att ? 1.05 : 0.75) + b.z*(att ? 0.12 : 0.3);
+        let z = base.z*(att ? 1.05*widthF : 0.75*(0.9 + widthF*0.1)) + b.z*(att ? 0.12 : 0.3);
         if(att && i >= 9){                        // appels en profondeur, sans hors-jeu
           const lastDef = opp.filter((o,k)=> k>0).reduce((mx,o)=> d>0 ? Math.max(mx, o.pos.x) : Math.min(mx, o.pos.x), d>0 ? -HL : HL);
           x = d>0 ? Math.min(b.x + 16, lastDef - 0.6) : Math.max(b.x - 16, lastDef + 0.6);
@@ -2083,11 +2257,11 @@
     const c = BS.carrier;
     if(c && BS.mode === "held" && !BS.inHands){
       teamArr(c.side==="us"?"them":"us").forEach((h,i)=>{
-        if(i===0 || h.stun > 0 || h === IM.ctrl) return;
+        if(i===0 || h.stun > 0) return;
         const dd = Math.hypot(h.pos.x-c.pos.x, h.pos.z-c.pos.z);
         if(dd < 1.25){
           const a = fmSkill(c.side, c.idx).att, df = fmSkill(h.side, h.idx).def;
-          const p = 0.9 * df/(df + a) * (c === IM.ctrl ? 0.85 : 1);
+          const p = 0.9 * df/(df + a) * [0.85, 1, 1.25][tac(h.side).press];
           if(Math.random() < dt*p*1.6){ h.kick = 1; h.kickAmp = 0.85; c.stun = 0.7; giveTo(h, {silent:true}); fmTouch(h);
             if(FM.hooks && FM.hooks.event && Math.random() < 0.6) FM.hooks.event(`${h.backLabel || "Un défenseur"} récupère le ballon dans les pieds de ${c.backLabel || "son adversaire"} !`); }
         }
@@ -2136,7 +2310,6 @@
     R.taker.pos.set(R.spot.x, 0, R.spot.z); R.taker.vel.set(0,0,0);
     giveTo(R.taker, {silent:true}); fmTouch(R.taker);
     FM.restart = null; FM.state = "play"; FM.decideT.set(R.taker, R.kind === "corner" ? 0.3 : 0.6);
-    if(R.team === "us" && R.taker.idx !== 0) imSetCtrl(R.taker);
     if(R.kind === "corner"){
       // corner : centre dans la surface vers l'attaquant le mieux placé
       const tgt = teamArr(R.team).filter((h,i)=> i>=5).sort((a,b)=> Math.abs(a.pos.x) - Math.abs(b.pos.x)).reverse()[0];
@@ -2150,14 +2323,16 @@
     // horloge (seulement ballon en jeu)
     if(FM.state === "play" || FM.state === "restart"){
       FM.clock += dt * (90*60 / FM.dur);
+      coachUpdate(dt * (90*60 / FM.dur));
       const min = Math.floor(FM.clock/60);
       if(min !== FM.lastMin){ FM.lastMin = min; m.minute = Math.min(min, FM.half===1 ? 45 : 90 + Math.ceil(FM.added/60)); if(FM.hooks && FM.hooks.minute) FM.hooks.minute(m.minute); }
-      if(FM.half === 1 && FM.clock >= 45*60 + FM.added*0.5 && !(act && act.kind==="shot")){ FM.state = "half"; FM.stateT = 0; if(FM.hooks && FM.hooks.halftime) FM.hooks.halftime(); }
+      if(FM.half === 1 && FM.clock >= 45*60 + FM.added*0.5 && !(act && act.kind==="shot")){ FM.state = "half"; FM.stateT = 0; FM.waitHalf = !!(FM.hooks && FM.hooks.halftime && FM.hooks.halftime() === "wait");
+        COACH.energy.us = Math.min(1, COACH.energy.us + 0.1); COACH.energy.them = Math.min(1, COACH.energy.them + 0.1); COACH.shout = {us:null, them:null}; }
       else if(FM.half === 2 && FM.clock >= 90*60 + FM.added && !(act && act.kind==="shot")){ FM.state = "end"; if(FM.hooks && FM.hooks.end) FM.hooks.end(); fmStop(); return; }
     }
     if(FM.state === "half"){
-      FM.stateT += dt;
-      if(FM.stateT > 4){ FM.half = 2; FM.clock = 45*60; fmKickoff("them"); }
+      if(!FM.waitHalf) FM.stateT += dt;                       // v52 : on attend la causerie du vestiaire
+      if(FM.stateT > 4){ FM.half = 2; FM.clock = 45*60; fmKickoff("them"); updateCoachUI(); }
       return;
     }
     if(FM.state === "goal"){
@@ -2193,39 +2368,20 @@
     // porteur IA (tous sauf le joueur contrôlé)
     const c = BS.carrier;
     // (le joueur de l'utilisateur est aussi aidé par l'IA s'il reste sans consigne plus de 2,5 s avec le ballon)
-    if(c && (c !== IM.ctrl || IM.lastInput > 2.5) && FM.state === "play" && !(act && act.kind === "shot") && !FM.pendingKick) fmCarrierAI(c, dt);
+    if(c && FM.state === "play" && !(act && act.kind === "shot") && !FM.pendingKick) fmCarrierAI(c, dt);
     // ballon libre : le plus proche de chaque équipe va le chercher
     if(BS.mode === "loose" && !act){
       // on vise là où le ballon VA être (sinon on ralentit en arrivant et il nous échappe)
       const aim = BS.pos.clone().addScaledVector(BS.vel, 0.7).setY(0);
-      ["us","them"].forEach(sd=>{ const t2 = teamArr(sd).filter((h,i)=> i>0 && (h !== IM.ctrl || IM.lastInput > 1.2)).sort((a,b)=> a.pos.distanceTo(BS.pos) - b.pos.distanceTo(BS.pos))[0]; if(t2) t2.override = aim; });
+      ["us","them"].forEach(sd=>{ const t2 = teamArr(sd).filter((h,i)=> i>0).sort((a,b)=> a.pos.distanceTo(BS.pos) - b.pos.distanceTo(BS.pos))[0]; if(t2) t2.override = aim; });
     }
-    // contrôle automatique : on récupère le ballon -> on joue le porteur ; loin de l'action -> le plus proche
-    if(BS.carrier && BS.carrier.side === "us" && BS.carrier !== IM.ctrl && BS.carrier.idx !== 0) imSetCtrl(BS.carrier);
-    FM.switchT += dt;
-    if(FM.switchT > 2.5 && IM.ctrl && (!BS.carrier || BS.carrier.side === "them") && IM.ctrl.pos.distanceTo(world.ball.position) > 26){ FM.switchT = 0; fmSwitch(); }
     // officiels et banc
     teams.ref.tgt.set(clamp(world.ball.position.x-9, -HL+8, HL-8), 0, clamp(world.ball.position.z+11, -HW+3, HW-3));
     teams.linesmen[0].tgt.set(clamp(Math.min(world.ball.position.x, -10), -HL, 0), 0, -HW-1.2);
     teams.linesmen[1].tgt.set(clamp(Math.max(world.ball.position.x, 10), 0, HL), 0, HW+1.2);
-    teams.coach.tgt.set(clamp(world.ball.position.x*0.08-9, -14, -4), 0, HW+2.2);
+    // le sélectionneur (vous) arpente sa zone technique et s'avance quand il donne des consignes
+    teams.coach.tgt.set(clamp(world.ball.position.x*0.08-9, -14, -4), 0, HW + (COACH.gesture > 0 ? 1.2 : 2.2));
   }
-  function fmSwitch(){
-    const b = world.ball.position;
-    const best = teams.us.filter((h,i)=> i>0).sort((a,c)=> a.pos.distanceTo(b) - c.pos.distanceTo(b))[0];
-    if(best) imSetCtrl(best);
-  }
-  function fmUserTackle(){
-    const u = IM.ctrl, c = BS.carrier;
-    if(!u) return;
-    u.kick = 1; u.kickAmp = 0.9;
-    if(c && c.side === "them" && Math.hypot(c.pos.x-u.pos.x, c.pos.z-u.pos.z) < 2.0){
-      const a = fmSkill("them", c.idx).att, df = fmSkill("us", u.idx).def;
-      if(Math.random() < 0.35 + 0.5*df/(df+a)){ c.stun = 0.8; giveTo(u, {silent:true}); fmTouch(u); if(FM.hooks && FM.hooks.event) FM.hooks.event(`Tacle parfait de ${u.backLabel} !`); }
-      else { u.stun = 0.6; }
-    } else u.stun = 0.35;
-  }
-
   // ---------------------------------------------------------------- boucle
   let acc = 0;
   function frame(){
@@ -2244,16 +2400,17 @@
       replayStep(dtRaw > 0.1 ? 0.1 : dtRaw);
       const cu0 = world.crowd.material.uniforms; cu0.time.value = t; cu0.excite.value = world.excite; cu0.flash.value = 0.6;
       updateHud(m);
-      renderer.render(scene, camera);
+      renderFrame();
       return;
     }
-    if(FM.on && FM.m === m){ fmUpdate(dt); imControl(dt); }
+    if(FM.on && FM.m === m) fmUpdate(dt);
+    if(COACH.gesture > 0) COACH.gesture -= dt;
     else syncTargets(m, false);
-    if(FM.paused && FM.on){ updateHud(m); renderer.render(scene, camera); return; }
+    if(FM.paused && FM.on){ updateHud(m); renderFrame(); return; }
     updatePlayers(dt, t);
     if(!m.showcase) updateBallSystem(dt); else world.ball.position.set(0, 0.11, 0);
     const rc = !m.showcase && BS.carrier;
-    world.ring.visible = !!rc && !(IM.on && IM.view === "fp" && rc === IM.ctrl);   // pas d'anneau sous ses propres pieds en vue subjective
+    world.ring.visible = !!rc;
     if(rc){ world.ring.position.set(rc.pos.x, 0.025, rc.pos.z); world.ring.material.color.set(rc.side==="us" ? teams.kits.us[0] : teams.kits.them[0]); world.ring.scale.setScalar(1 + Math.sin(t*6)*0.06); }
     updateCamera(dt, t);
     if(!m.showcase) updateScreens(m);
@@ -2284,7 +2441,7 @@
     }
     if(world.confetti.visible) updateConfetti(dt);
     if(!m.showcase){ updateHud(m); recFrame(t); }
-    renderer.render(scene, camera);
+    renderFrame();
   }
 
   function start(){ if(running) return; running = true; clock.getDelta(); rafId = requestAnimationFrame(frame); }
@@ -2299,6 +2456,7 @@
     if(!w || !h) return;
     renderer.setSize(w, h, false);
     camera.aspect = w/h; camera.updateProjectionMatrix();
+    resizePost(w, h);
   }
 
   // ---------------------------------------------------------------- HUD (surimpression façon TV)
@@ -2419,9 +2577,9 @@
     world.weather.visible = !!cur.weatherKind;
     world.weather.material.size = cur.weatherKind==="neige" ? 0.22 : 0.09;
     world.weather.material.color.set(cur.weatherKind==="neige" ? 0xffffff : 0xbcd0ff);
-    applyLighting(wk);
+    applyLighting(wk); world.beamsTop = null;
     if(newMatch){
-      if(FM.on && FM.m !== m){ FM.on = false; IM.on = false; IM.ctrl = null; IM.dom = null; }
+      if(FM.on && FM.m !== m){ FM.on = false; COACH.dom = null; }
       fsOn = false; camState.goalCam = 0; RP.on = false; RP.pendingAt = 0;
       buildTeams(m);
       resetBall(m);
@@ -2459,9 +2617,10 @@
       scene.background.set(0x8fb6e8); scene.fog.color.set(0xa8c4e6);
       world.key.intensity = 3.0; world.key.color.set(0xfff1d6); world.hemi.intensity = 0.9;
       world.flares.forEach(f=> f.visible=false);
-      (world.beams||[]).forEach(b=> b.visible=false);
+      (world.beams||[]).forEach(b=> b.visible=false); world.beamsOn = false;
       world.crowd.material.uniforms.light.value = 1.05;
       renderer.toneMappingExposure = 1.0;
+      scene.environmentIntensity = 0.55; POST.night = false; GRASS_U.uWet.value = 0;
     } else {
       const gloomy = wk==="pluie" || wk==="froid";
       sky.top.value.set(gloomy?0x05070d:0x02040c); sky.bottom.value.set(gloomy?0x2a2f3c:0x1a2448); sky.day.value = gloomy?1:0;
@@ -2469,9 +2628,10 @@
       scene.fog.near = gloomy ? 90 : 180;
       world.key.intensity = 2.1; world.key.color.set(0xfff4e0); world.hemi.intensity = 0.55;
       world.flares.forEach(f=> f.visible=true);
-      (world.beams||[]).forEach(b=> b.visible=true);
+      (world.beams||[]).forEach(b=> b.visible=true); world.beamsOn = true;
       world.crowd.material.uniforms.light.value = 0.92;
       renderer.toneMappingExposure = 1.05;
+      scene.environmentIntensity = 0.28; POST.night = true; GRASS_U.uWet.value = wk==="pluie" ? 1 : 0;
     }
   }
 
@@ -2486,10 +2646,9 @@
     }
   };
   // Diagnostic (tests) : état du ballon et de la file d'actions
-  S._debug = ()=>({fm: FM.on ? {state:FM.state, clock:Math.round(FM.clock), restart: FM.restart ? FM.restart.kind : null, near: teams ? Math.min(...teams.us.concat(teams.them).map(h=> +h.pos.distanceTo(BS.pos).toFixed(1))) : null, vel:+BS.vel.length().toFixed(2), act: act ? act.kind : null, q: queue.length, pk: !!FM.pendingKick} : null, dbg:JSON.parse(JSON.stringify(dbg)), mode:BS.mode, carrier: BS.carrier ? BS.carrier.side+BS.carrier.idx : null, q:queue.length, act: act ? act.kind : null,
+  S._debug = ()=>({fm: FM.on ? {state:FM.state, clock:Math.round(FM.clock), wait:!!FM.waitHalf, stT:+FM.stateT.toFixed(2), half:FM.half, restart: FM.restart ? FM.restart.kind : null, near: teams ? Math.min(...teams.us.concat(teams.them).map(h=> +h.pos.distanceTo(BS.pos).toFixed(1))) : null, vel:+BS.vel.length().toFixed(2), act: act ? act.kind : null, q: queue.length, pk: !!FM.pendingKick} : null, dbg:JSON.parse(JSON.stringify(dbg)), mode:BS.mode, carrier: BS.carrier ? BS.carrier.side+BS.carrier.idx : null, q:queue.length, act: act ? act.kind : null,
     ball:[+BS.pos.x.toFixed(1), +BS.pos.y.toFixed(2), +BS.pos.z.toFixed(1)],
     footDist: BS.carrier ? +Math.hypot(BS.carrier.pos.x-BS.pos.x, BS.carrier.pos.z-BS.pos.z).toFixed(2) : null});
-  S._ctrlPos = ()=> IM.ctrl ? [+IM.ctrl.pos.x.toFixed(1), +IM.ctrl.pos.z.toFixed(1), +IM.ctrl.heading.toFixed(2)] : null;
   S._fmJump = (sec)=>{ if(FM.on) FM.clock = sec; };   // tests : avance l'horloge du match joué
   S._fmTestGoal = (side)=>{ if(FM.on){ queue = []; act = null; BS.mode = "dead"; FM.shotPending = {side:side||"us", idx:9, outcome:"goal", assist:7}; } };
   // Actions de jeu envoyées par le moteur de match (cf. playPassChain / playSequence dans index.html)
